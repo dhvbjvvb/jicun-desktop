@@ -39,8 +39,13 @@ public sealed class MediaItem
 
     public string Subtitle => string.IsNullOrWhiteSpace(QualityLabel) ? KindLabel : KindLabel + " · " + QualityLabel;
 
-    /// <summary>文案和图片没有原生播放器,预览按钮要按类型禁用。</summary>
-    public bool CanPreview => Kind is MediaKind.Video or MediaKind.Audio or MediaKind.Image;
+    /// <summary>
+    /// 文案没有播放器，禁用；地址不是绝对地址的也禁用 —— 预览窗口里 <c>new Uri</c> 会直接抛，
+    /// 那个事件处理器没人接异常，等于整个程序消失（服务端兜底那条路会下发以 / 开头的相对地址）。
+    /// </summary>
+    public bool CanPreview =>
+        Kind is MediaKind.Video or MediaKind.Audio or MediaKind.Image
+        && Uri.TryCreate(Url, UriKind.Absolute, out _);
 
     /// <summary>缩略图没加载出来时垫在底下的 Segoe MDL2 图标。</summary>
     public string Glyph => Kind switch
@@ -86,8 +91,8 @@ public sealed class ParseResult
             Title = UpstreamMapping.CleanCopyText(Str(json, "title")),
             Desc = UpstreamMapping.CleanCopyText(Str(json, "desc")),
             Platform = Str(json, "platform"),
-            CoverUrl = StrOrNull(json, "cover_url"),
-            VideoUrl = StrOrNull(json, "video_url"),
+            CoverUrl = UpstreamMapping.Absolute(StrOrNull(json, "cover_url")),
+            VideoUrl = UpstreamMapping.Absolute(StrOrNull(json, "video_url")),
             AudioUrl = UpstreamMapping.Absolute(StrOrNull(json, "audio_url")),
             Lyrics = UpstreamMapping.LyricsOf(json),
         };
@@ -107,7 +112,7 @@ public sealed class ParseResult
             {
                 if (it.ValueKind == JsonValueKind.String)
                 {
-                    if (AsString(it) is { } text) images.Add(text);
+                    if (AsString(it) is { } text) images.Add(UpstreamMapping.Absolute(text) ?? text);
                     continue;
                 }
                 if (it.ValueKind != JsonValueKind.Object) continue;
@@ -115,9 +120,9 @@ public sealed class ParseResult
                 var url = StrOrNull(it, "url");
                 var live = StrOrNull(it, "live_photo_url");
                 if (live is not null)
-                    livePhotos.Add(new VideoVariant { Url = live, CoverUrl = url, Label = LivePhotoLabel });
+                    livePhotos.Add(new VideoVariant { Url = UpstreamMapping.Absolute(live) ?? live, CoverUrl = UpstreamMapping.Absolute(url), Label = LivePhotoLabel });
                 else if (url is not null)
-                    images.Add(url);
+                    images.Add(UpstreamMapping.Absolute(url) ?? url);
             }
         }
 
@@ -129,7 +134,7 @@ public sealed class ParseResult
                 if (it.ValueKind == JsonValueKind.String)
                 {
                     if (AsString(it) is { } text)
-                        livePhotos.Add(new VideoVariant { Url = text, Label = LivePhotoLabel });
+                        livePhotos.Add(new VideoVariant { Url = UpstreamMapping.Absolute(text) ?? text, Label = LivePhotoLabel });
                     continue;
                 }
                 if (it.ValueKind != JsonValueKind.Object) continue;
@@ -138,8 +143,8 @@ public sealed class ParseResult
                 if (live is null) continue;
                 livePhotos.Add(new VideoVariant
                 {
-                    Url = live,
-                    CoverUrl = StrOrNull(it, "url") ?? StrOrNull(it, "cover_url"),
+                    Url = UpstreamMapping.Absolute(live) ?? live,
+                    CoverUrl = UpstreamMapping.Absolute(StrOrNull(it, "url") ?? StrOrNull(it, "cover_url")),
                     Label = LivePhotoLabel,
                 });
             }
@@ -156,17 +161,17 @@ public sealed class ParseResult
 
                 if (v.ValueKind == JsonValueKind.String)
                 {
-                    url = AsString(v);
+                    url = UpstreamMapping.Absolute(AsString(v));
                 }
                 else if (v.ValueKind == JsonValueKind.Object)
                 {
-                    url = StrOrNull(v, "url") ?? StrOrNull(v, "play_url") ?? StrOrNull(v, "video_url");
-                    cover = StrOrNull(v, "cover_url") ?? StrOrNull(v, "cover");
+                    url = UpstreamMapping.Absolute(StrOrNull(v, "url") ?? StrOrNull(v, "play_url") ?? StrOrNull(v, "video_url"));
+                    cover = UpstreamMapping.Absolute(StrOrNull(v, "cover_url") ?? StrOrNull(v, "cover"));
                     if (url is null && v.TryGetProperty("qualities", out var fallback)
                         && fallback.ValueKind == JsonValueKind.Array)
                     {
                         foreach (var q in fallback.EnumerateArray())
-                            if (StrOrNull(q, "url") is { } first) { url = first; break; }
+                            if (StrOrNull(q, "url") is { } first) { url = UpstreamMapping.Absolute(first); break; }
                     }
                 }
 
@@ -182,7 +187,7 @@ public sealed class ParseResult
                         if (StrOrNull(q, "url") is not { } qualityUrl) continue;
                         r.Videos.Add(new VideoVariant
                         {
-                            Url = qualityUrl,
+                            Url = UpstreamMapping.Absolute(qualityUrl) ?? qualityUrl,
                             CoverUrl = cover,
                             Label = StrOrNull(q, "label"),
                             BitRate = IntOrNull(q, "bit_rate"),
@@ -247,7 +252,40 @@ public sealed class ParseResult
     }
 }
 
+/// <summary>
+/// 解析失败的**类别**。它决定两件事：调用方还要不要换个入口/等一会儿再试，以及界面该怎么说话。
+/// </summary>
+public enum ParseFailure
+{
+    /// <summary>
+    /// 服务器给了结论：这条链接就是解析不了（链接失效、平台不支持、白名单没开…）。
+    /// 换入口、重试都没用，直接把这句话给用户。
+    /// </summary>
+    Content,
+
+    /// <summary>
+    /// 这次请求本身没成：DNS / TLS / 超时 / 网关错误页 / 应答不像 JSON / 太频繁。
+    /// 换个入口再试是有意义的 —— 域名池就是为这一类故障准备的。
+    /// </summary>
+    Transport,
+}
+
+/// <summary>
+/// 解析失败。<see cref="Failure"/> 是**结构化的类别**，别让调用方去猜那句话是什么意思：
+/// 「链接失效」和「网关 502」在文案上看着像，该做的事却正好相反。
+/// </summary>
 public sealed class ParseException : Exception
 {
-    public ParseException(string message) : base(message) { }
+    /// <summary>默认按「内容级」算 —— 这个类型绝大多数抛出点都是服务器给了明确结论。</summary>
+    public ParseException(string message, ParseFailure failure = ParseFailure.Content) : base(message)
+        => Failure = failure;
+
+    /// <summary>
+    /// 带上底层原因的那种。界面上只露中文那句话，原始异常留在内层 ——
+    /// 排障或者以后加日志时还能把它捞出来，不用猜当时到底哪一步失败了。
+    /// </summary>
+    public ParseException(string message, ParseFailure failure, Exception inner) : base(message, inner)
+        => Failure = failure;
+
+    public ParseFailure Failure { get; }
 }

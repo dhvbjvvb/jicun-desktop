@@ -1,0 +1,33 @@
+name: ci
+
+# 门槛就一条：能编译 + 自检全过。自检不联网、不开界面，几秒就跑完。
+#
+# 说明：仓库里那份真实应答样本（test/fixtures/）是内部资料、不进仓库，所以别人 clone 出来
+# 跑自检时，那一组会被显式 skip 掉（自检自己会把 skip 打出来），其余断言照跑。
+# 判定只看退出码 —— 0 才是全过。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-and-selftest:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: 编译（Release）
+        working-directory: jicun-desktop
+        run: dotnet build -c Release -nologo
+
+      - name: 自检
+        working-directory: jicun-desktop
+        run: |
+          .\bin\Release\net10.0-windows10.0.19041.0\win-x64\Jicun.exe --selftest
+          if ($LASTEXITCODE -ne 0) { throw "自检没过（exit $LASTEXITCODE）" }

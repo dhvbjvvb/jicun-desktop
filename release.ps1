@@ -3,6 +3,11 @@
 
   客户端就是靠仓库里的 update/<运行时>.json 发现新版的，所以发完之后记得提交推送。
 
+
+  **更新说明只有一个来源：这个版本的 GitHub Release 正文**（清单里不放说明）。所以：
+    - -NotesFile 支持 Markdown，弹窗会渲染（# 标题、**加粗**、==高亮==、- 列表、居中…见 README「更新」一节）
+    - 光写清单不算完：必须 -Publish（或在网页上建 Release），否则客户端拿不到说明，只能显示「没有写更新说明」
+    - 发完之后改 Release 正文，用户下次检查就能看到，不用重发一版
   用法：
     .\release.ps1 -Version 1.0.1 -Notes "修了解析时闪退；设置页加了检查更新"
     .\release.ps1 -Version 1.0.1 -NotesFile notes.md
@@ -61,7 +66,6 @@ Write-Host "sha256 $hash" -ForegroundColor Cyan
 # 4. 写清单。下载地址写 GitHub Release 的附件；客户端会自动套镜像，并且必须对得上 sha256
 $manifest = [ordered]@{
     version     = $clean
-    notes       = $Notes.Trim()
     url         = "https://github.com/$repo/releases/download/v$clean/Jicun-$Runtime.zip"
     sha256      = $hash
     size        = $size
@@ -73,7 +77,7 @@ $manifestPath = Join-Path $manifestDir "$Runtime.json"
 [System.IO.File]::WriteAllText($manifestPath, ($manifest | ConvertTo-Json -Depth 4), $utf8)
 Write-Host "清单已写：$manifestPath" -ForegroundColor Green
 
-# 5. 可选：发 GitHub Release。检测不依赖它（检测只看仓库里的清单），但客户端下载用的是这个附件
+# 5. 发 GitHub Release：**更新说明只有这一个来源**（清单里不放说明），下载附件也走它
 if ($Publish) {
     if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
         throw "没装 gh（GitHub CLI），用不了 -Publish；也可以自己到网页把 $zip 传上去"
@@ -81,6 +85,9 @@ if ($Publish) {
     gh release create "v$clean" $zip --repo $repo --title "即存 for Windows $clean" --notes $Notes
     if ($LASTEXITCODE -ne 0) { throw "gh release create 失败（exit $LASTEXITCODE）" }
     Write-Host "Release 已发布：https://github.com/$repo/releases/tag/v$clean" -ForegroundColor Green
+}
+else {
+    Write-Warning "没有 -Publish：GitHub 上就没有 v$clean 这个 Release，客户端拿不到更新说明（弹窗会显示「没有写更新说明」）。下载附件也得靠它。"
 }
 
 Write-Host ""

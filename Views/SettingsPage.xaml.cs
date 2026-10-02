@@ -39,26 +39,43 @@ public sealed partial class SettingsPage : Page
         if (AppServices.MainWindow is not { } window) return;
 
         var kind = KindOf(sender);
-        var picker = new FolderPicker
+
+        try
         {
-            SuggestedStartLocation = kind switch
+            var picker = new FolderPicker
             {
-                MediaKind.Image => PickerLocationId.PicturesLibrary,
-                MediaKind.Audio => PickerLocationId.MusicLibrary,
-                _ => PickerLocationId.VideosLibrary,
-            },
-        };
-        picker.FileTypeFilter.Add("*");
+                SuggestedStartLocation = kind switch
+                {
+                    MediaKind.Image => PickerLocationId.PicturesLibrary,
+                    MediaKind.Audio => PickerLocationId.MusicLibrary,
+                    _ => PickerLocationId.VideosLibrary,
+                },
+            };
+            picker.FileTypeFilter.Add("*");
 
-        // 非打包应用必须把窗口句柄交给选择器，否则它不知道怎么弹
-        WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(window));
+            // 非打包应用必须把窗口句柄交给选择器，否则它不知道怎么弹
+            WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(window));
 
-        var folder = await picker.PickSingleFolderAsync();
-        if (folder is null) return;
+            var folder = await picker.PickSingleFolderAsync();
+            if (folder is null) return;
 
-        AppServices.Settings.Current.SetFolder(kind, folder.Path);
-        AppServices.Settings.Save();
-        Refresh();
+            AppServices.Settings.Current.SetFolder(kind, folder.Path);
+            AppServices.Settings.Save();
+            Refresh();
+        }
+        catch (Exception ex)
+        {
+            // 选择器 / 窗口互操作抛 COM 异常，在这类 async void 处理器里没人接 —— 就是进程消失。
+            // 也不能静默吞掉：用户点完「选择...」什么都没发生，只会以为按钮坏了。
+            ShowError("没能设置保存位置：" + ex.Message);
+        }
+    }
+
+    /// <summary>设置页的报错出口（选目录这类失败原来是无处可说的）。</summary>
+    private void ShowError(string message)
+    {
+        ErrorBar.Message = message;
+        ErrorBar.IsOpen = true;
     }
 
     private void OnOpenClick(object sender, RoutedEventArgs e)

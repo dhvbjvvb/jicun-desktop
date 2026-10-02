@@ -59,9 +59,10 @@
                                         HorizontalAlignment="Center"
                                         VerticalAlignment="Center" />
                                     <!-- 和解析页一致：整图缩放，不裁不放大 -->
+                                    <!-- 216 = 格子宽 108 的两倍（限定解码尺寸，别按原图整张解） -->
                                     <Image
                                         Stretch="Uniform"
-                                        Source="{x:Bind CoverUrl, Converter={StaticResource UrlToImage}}" />
+                                        Source="{x:Bind CoverUrl, Converter={StaticResource UrlToImage}, ConverterParameter=216}" />
                                 </Grid>
 
                                 <StackPanel Grid.Column="1" Spacing="4" VerticalAlignment="Center">

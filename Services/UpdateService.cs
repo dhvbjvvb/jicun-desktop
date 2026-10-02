@@ -16,12 +16,12 @@ namespace Jicun.Desktop.Services;
 /// <remarks>
 /// 为什么不直接问 GitHub Releases API：那个接口国内时通时不通，也没有 CDN 可以垫。
 /// 清单是个静态文件，能走 GitHub 镜像 + jsDelivr —— 这就是「检测走 CDN / 镜像」。
-/// 版本号、更新说明、下载地址、sha256 全在清单里，客户端只认这一份。
+/// 版本号、下载地址、sha256 全在清单里，客户端只认这一份。
+/// 更新说明**不在**清单里：只从 GitHub Release 正文取（见 FetchNotesAsync）。
 /// </remarks>
 public sealed class UpdateManifest
 {
     public string Version { get; set; } = "";
-    public string? Notes { get; set; }
 
     /// <summary>zip 的地址。GitHub 的 release 附件会被换成镜像地址再试。</summary>
     public string Url { get; set; } = "";
@@ -78,8 +78,19 @@ public static class UpdateService
     /// <summary>下载的 zip 和解压出来的新版都放这儿。装完系统自己会清，装不上就留着下次重来。</summary>
     public static string UpdateDir { get; } = Path.Combine(StateDir, "update");
 
-    // 清单很小，10 秒够了；下载单独一个 HttpClient，不然大文件会被超时掐死。
-    private static readonly HttpClient ManifestHttp = new() { Timeout = TimeSpan.FromSeconds(10) };
+    // 三套超时这里各占一层：清单用**固定超时**（10 秒够，文件很小），下载把上限交给调用处的
+    // **整体预算** CTS（20 分钟，见 DownloadAsync）—— 大文件绝不能被一个固定超时掐死。
+    private static readonly HttpClient ManifestHttp = CreateManifestHttp();
+
+    /// <summary>
+    /// 清单和 Release 说明都走这个客户端。必须带 User-Agent：GitHub 的 API 不给没有 UA 的请求回数据。
+    /// </summary>
+    private static HttpClient CreateManifestHttp()
+    {
+        var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+        http.DefaultRequestHeaders.UserAgent.ParseAdd("Jicun-Desktop");
+        return http;
+    }
     private static readonly HttpClient DownloadHttp = new() { Timeout = Timeout.InfiniteTimeSpan };
 
     private static readonly JsonSerializerOptions Json = new() { PropertyNameCaseInsensitive = true };
@@ -100,6 +111,19 @@ public static class UpdateService
         var cut = s.IndexOfAny(new[] { '-', '+', ' ' });
         if (cut >= 0) s = s[..cut];
         return s.Length > 0 && Version.TryParse(s, out var v) ? v : null;
+    }
+
+    /// <summary>把清单里的版本号收敛成「能安全拼进路径」的形状。</summary>
+    /// <remarks>
+    /// 远端字符串绝不能直接进路径：<c>1.0.1-..\..\..\Temp</c> 这种能过 <see cref="ParseVersion"/>
+    /// 的截断（在 - 处切）也能过 <see cref="UpdateManifest.IsUsable"/> 的形状校验，而 staging 路径
+    /// 后面跟着的是递归删除 + 解压 + 启动进程。凡是要拼进路径的版本号都先过这里。
+    /// </remarks>
+    internal static string PathSafeVersion(string version)
+    {
+        var clean = ParseVersion(version)?.ToString();
+        if (string.IsNullOrEmpty(clean)) throw new FormatException("清单里的版本号不对劲：" + version);
+        return clean;
     }
 
     #region 忽略的版本
@@ -181,10 +205,8 @@ public static class UpdateService
         {
             try
             {
-                using var resp = await ManifestHttp.GetAsync(url, ct).ConfigureAwait(false);
-                if (resp.StatusCode != HttpStatusCode.OK) continue;
-
-                var body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                var body = await ReadMaybeLocalAsync(url, ct).ConfigureAwait(false);
+                if (body is null) continue;
                 var manifest = JsonSerializer.Deserialize<UpdateManifest>(body.TrimStart('\uFEFF'), Json);
                 if (manifest is null || !manifest.IsUsable) continue;
 
@@ -203,11 +225,86 @@ public static class UpdateService
         return null;
     }
 
+    /// <summary>
+    /// 拉某个版本的**发布说明**（GitHub Release 正文的 Markdown 原文）。拉不到返回 null，
+    /// 调用方会退回清单里那份 notes。
+    /// </summary>
+    /// <remarks>
+    /// 为什么版本检测不走这个接口、说明却走：检测要的是「稳」（静态清单能走镜像和 CDN），
+    /// 而说明是给人看的文字 —— 从 Release 正文拿的好处是**你在 GitHub 网页上改了说明，
+    /// 用户下次检查更新就能看到**，不用重新发一版。
+    /// 镜像（gh-proxy）也会经手这段文字，但它只是文本、不执行任何东西；里面的链接只放行 http(s)。
+    /// </remarks>
+    public static async Task<string?> FetchNotesAsync(string version, CancellationToken ct = default)
+    {
+        foreach (var url in ReleaseApiUrls(version))
+        {
+            try
+            {
+                var body = await ReadMaybeLocalAsync(url, ct).ConfigureAwait(false);
+                if (body is null) continue;
+
+                using var doc = JsonDocument.Parse(body.TrimStart('\uFEFF'));
+                if (!doc.RootElement.TryGetProperty("body", out var value) || value.ValueKind != JsonValueKind.String) continue;
+
+                var notes = value.GetString();
+                if (!string.IsNullOrWhiteSpace(notes)) return notes.Trim();
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                return null;
+            }
+            catch
+            {
+                // 换下一个地址；都拿不到就退回清单里那份说明
+            }
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// 某版本的 Release 说明在哪儿取。<c>JICUN_RELEASE_API</c> 是排障 / 自检用的（可以指本地文件）。
+    /// **不能让 ghfast 上**：实测它对 api 路径回 403，它只代理 raw 和 releases 附件。
+    /// </summary>
+    private static IEnumerable<string> ReleaseApiUrls(string version)
+    {
+        var custom = Environment.GetEnvironmentVariable("JICUN_RELEASE_API");
+        if (!string.IsNullOrWhiteSpace(custom))
+        {
+            // 指定了就只走它：排障 / 自检不该再偷偷去撞真地址
+            yield return custom.Trim();
+            yield break;
+        }
+
+        var tag = version.StartsWith('v') || version.StartsWith('V') ? version : "v" + version;
+        var api = "https://api.github.com/repos/" + Repo + "/releases/tags/" + tag;
+        yield return "https://gh-proxy.com/" + api;   // 国内直连 api.github.com 常被挡，镜像先试
+        yield return api;
+    }
+
+    /// <summary>
+    /// 读一个地址。**如果这个地址其实是本机已存在的文件路径，就直接读文件** ——
+    /// 这样排障和自检能在「还没发布任何版本」的情况下，把「弹窗里到底显示什么」完整跑一遍
+    /// （JICUN_UPDATE_MANIFEST / JICUN_RELEASE_API 指到本地 JSON 即可）。
+    /// </summary>
+    private static async Task<string?> ReadMaybeLocalAsync(string url, CancellationToken ct)
+    {
+        if (File.Exists(url)) return await File.ReadAllTextAsync(url, ct).ConfigureAwait(false);
+
+        using var resp = await ManifestHttp.GetAsync(url, ct).ConfigureAwait(false);
+        if (resp.StatusCode != HttpStatusCode.OK) return null;
+        return await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+    }
+
     private static IEnumerable<string> ManifestUrls()
     {
         // 本机调试 / 自建镜像用：直接指定清单地址，跳过所有候选
         var custom = Environment.GetEnvironmentVariable("JICUN_UPDATE_MANIFEST");
-        if (!string.IsNullOrWhiteSpace(custom)) yield return custom.Trim();
+        if (!string.IsNullOrWhiteSpace(custom))
+        {
+            yield return custom.Trim();
+            yield break;
+        }
 
         var raw = "https://raw.githubusercontent.com/" + Repo + "/" + Branch + "/" + ManifestPath;
         yield return "https://ghfast.top/" + raw;
@@ -238,7 +335,7 @@ public static class UpdateService
     public static async Task<string> DownloadAsync(UpdateManifest manifest, IProgress<double>? progress, CancellationToken ct = default)
     {
         Directory.CreateDirectory(UpdateDir);
-        var zip = Path.Combine(UpdateDir, "Jicun-" + manifest.Version + ".zip");
+        var zip = Path.Combine(UpdateDir, "Jicun-" + PathSafeVersion(manifest.Version) + ".zip");
         Exception? last = null;
 
         foreach (var url in DownloadUrls(manifest.Url))
@@ -313,7 +410,7 @@ public static class UpdateService
     /// <summary>解压到独立目录。**不**直接往安装目录里解 —— 那时候主程序还在跑，文件都占着。</summary>
     public static string Extract(string zip, string version)
     {
-        var staging = Path.Combine(UpdateDir, "staging-" + version);
+        var staging = Path.Combine(UpdateDir, "staging-" + PathSafeVersion(version));
         TryDeleteDir(staging);
         Directory.CreateDirectory(staging);
         ZipFile.ExtractToDirectory(zip, staging, true);

@@ -69,13 +69,14 @@ public sealed class DownloadTask : INotifyPropertyChanged
     public bool CanCancel => IsRunning;
     public bool CanOpen => SavedPath is not null;
 
+    private static readonly string[] SizeUnits = { "B", "KB", "MB", "GB" };
+
     private static string Format(long bytes)
     {
-        string[] units = { "B", "KB", "MB", "GB" };
         double v = bytes;
         var i = 0;
-        while (v >= 1024 && i < units.Length - 1) { v /= 1024; i++; }
-        return v.ToString(i == 0 ? "0" : "0.0") + " " + units[i];
+        while (v >= 1024 && i < SizeUnits.Length - 1) { v /= 1024; i++; }
+        return v.ToString(i == 0 ? "0" : "0.0") + " " + SizeUnits[i];
     }
 
     // ---- 后台线程调用 ----
@@ -179,6 +180,7 @@ public sealed class DownloadService
     private const long SegmentThreshold = 8L * 1024 * 1024;
     private const int Segments = ResumeStore.Segments;
 
+    // 超时的第二/三层由调用方管（下载走多久算多久 + 每段自己的重试），不在这层设固定上限。
     private static readonly HttpClient Http = new() { Timeout = Timeout.InfiniteTimeSpan };
 
     private readonly SemaphoreSlim _gate = new(3, 3);
@@ -202,6 +204,40 @@ public sealed class DownloadService
             Tasks.Insert(0, task);
             _ = RunAsync(task);
         }
+    }
+
+    /// <summary>
+    /// 清掉「合并到一半就被杀」留下的临时文件。那种文件现在落在**用户的下载目录**里
+    /// （见 DownloadSegmentedAsync），取消和失败两条路都清了，唯独进程被强杀那种留不下来。
+    /// 名字是我们自己定的 <c>.<16 位十六进制 id>.merged.part</c> —— 只认这个形状，不碰用户自己的文件。
+    /// </summary>
+    public void CleanupStaleMerges()
+    {
+        foreach (var kind in new[] { MediaKind.Video, MediaKind.Image, MediaKind.Audio })
+        {
+            try
+            {
+                var folder = AppServices.FolderFor(kind);
+                if (!Directory.Exists(folder)) continue;
+
+                foreach (var file in Directory.EnumerateFiles(folder, ".*.merged.part"))
+                    if (IsMergeTemp(Path.GetFileName(file))) TryDelete(file);
+            }
+            catch
+            {
+                // 目录读不动就算了，下次启动再清
+            }
+        }
+    }
+
+    /// <summary>合并临时文件的名字形状：<c>.<16 位十六进制>.merged.part</c>。</summary>
+    internal static bool IsMergeTemp(string name)
+    {
+        const string suffix = ".merged.part";
+        if (!name.StartsWith('.') || !name.EndsWith(suffix, StringComparison.Ordinal)) return false;
+
+        var id = name[1..^suffix.Length];
+        return id.Length == 16 && id.All(Uri.IsHexDigit);
     }
 
     /// <summary>
@@ -289,20 +325,24 @@ public sealed class DownloadService
         rec.SupportsRange = supportsRange;
         ResumeStore.Save(rec);
 
+        // 分段下载的合并结果直接落在**目标目录**（见 DownloadSegmentedAsync）：
+        // 同一个卷上改名是瞬时的，而落在 %LocalAppData% 时，只要下载目录在别的盘，
+        // 最后那一步 File.Move 就变成把整份文件再拷一遍。
+        // mergedTemp 声明在 try 外面：catch 里要拿它把半份合并结果清掉。
+        string? mergedTemp = null;
+
         try
         {
-            var merged = false;
+            string source;
             if (supportsRange && length is > SegmentThreshold)
             {
-                await DownloadSegmentedAsync(task, rec, length.Value, ct).ConfigureAwait(false);
-                merged = true;
+                source = mergedTemp = await DownloadSegmentedAsync(task, rec, length.Value, ct).ConfigureAwait(false);
             }
             else
             {
                 await DownloadSingleAsync(task, rec, supportsRange, ct).ConfigureAwait(false);
+                source = rec.SinglePath;
             }
-
-            var source = merged ? rec.MergedPath : rec.SinglePath;
 
             // 字节都下完了、用户在这之前按了取消的：以「已取消」收尾。
             // 少了这一句就会出现「明明按了取消，却报已完成」。
@@ -315,6 +355,7 @@ public sealed class DownloadService
 
             var dest = UniquePath(Path.Combine(folder, name));
             File.Move(source, dest, overwrite: true);
+            mergedTemp = null; // 已经改名走了，收尾不用再清
 
             // 音频落盘后补标签。失败不影响下载结论 —— 文件已经在那儿了，标签是加分项。
             await TryWriteAudioTagsAsync(task, dest).ConfigureAwait(false);
@@ -324,11 +365,13 @@ public sealed class DownloadService
         }
         catch (OperationCanceledException)
         {
+            if (mergedTemp is not null) TryDelete(mergedTemp); // 半份合并结果别留在用户的下载目录里
             ResumeStore.Drop(rec.Id); // 用户自己按的取消，不用留
             throw;
         }
         catch
         {
+            if (mergedTemp is not null) TryDelete(mergedTemp);
             // 网络/磁盘出错：分片和记录都留着，下次同一个链接进来从断点接
             throw;
         }
@@ -396,7 +439,12 @@ public sealed class DownloadService
         }
     }
 
-    private static async Task DownloadSegmentedAsync(DownloadTask task, ResumeRecord rec, long total, CancellationToken ct)
+    /// <summary>
+    /// 大文件分段并行，再把分片按顺序合成一份。
+    /// 合并结果直接落在**目标目录**里（调用方随后在同目录改名），这样下载目录在别的盘时
+    /// 不会在最后一步被 File.Move 变成整份再拷一遍。
+    /// </summary>
+    private static async Task<string> DownloadSegmentedAsync(DownloadTask task, ResumeRecord rec, long total, CancellationToken ct)
     {
         var chunk = total / Segments;
 
@@ -420,14 +468,26 @@ public sealed class DownloadService
 
         await Task.WhenAll(work).ConfigureAwait(false);
 
-        await using (var output = File.Create(rec.MergedPath))
+        Directory.CreateDirectory(task.Folder);
+        var merged = Path.Combine(task.Folder, "." + rec.Id + ".merged.part");
+        try
         {
-            for (var i = 0; i < Segments; i++)
+            await using (var output = File.Create(merged))
             {
-                await using var part = File.OpenRead(rec.PartPath(i));
-                await part.CopyToAsync(output, ct).ConfigureAwait(false);
+                for (var i = 0; i < Segments; i++)
+                {
+                    await using var part = File.OpenRead(rec.PartPath(i));
+                    await part.CopyToAsync(output, ct).ConfigureAwait(false);
+                }
             }
         }
+        catch
+        {
+            TryDelete(merged); // 半份合并结果不留在用户的下载目录里
+            throw;
+        }
+
+        return merged;
     }
 
     private static async Task DownloadRangeAsync(DownloadTask task, ResumeRecord rec, int index, long from, long to, CancellationToken ct)
@@ -557,5 +617,11 @@ public sealed class DownloadService
             var candidate = Path.Combine(dir, stem + " (" + i + ")" + ext);
             if (!File.Exists(candidate)) return candidate;
         }
+    }
+
+    /// <summary>删临时文件。删不掉就算了（可能被别的进程占着），别为清理动作再抛一次。</summary>
+    private static void TryDelete(string path)
+    {
+        try { if (File.Exists(path)) File.Delete(path); } catch { /* 占用中，下次再说 */ }
     }
 }

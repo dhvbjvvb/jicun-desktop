@@ -7,6 +7,16 @@ namespace Jicun.Desktop.Services;
 
 public sealed class Settings
 {
+
+    /// <summary>
+    /// 配置结构版本。读到比本程序更新的版本就**不回写** —— 免得老版本不认识新字段，一存就把它们抹掉。
+    /// 改了下面这些字段的**含义**才 +1；单纯加字段不用加（不认识的字段会原样被忽略，也能共存）。
+    /// </summary>
+    public int SchemaVersion { get; set; } = CurrentSchemaVersion;
+
+    /// <summary>本程序认的配置版本。</summary>
+    public const int CurrentSchemaVersion = 1;
+
     /// <summary>
     /// 老版本只有一个下载目录。读进来之后会摊到下面三个新字段里，之后不再往外写
     /// （保留属性只是为了能读懂旧配置文件）。
@@ -99,6 +109,9 @@ public sealed class SettingsService
 
     public void Save()
     {
+        // 配置来自更新的版本：我们只认得其中一部分字段，写回去等于把不认识的抹掉。宁可不存。
+        if (Current.SchemaVersion > Settings.CurrentSchemaVersion) return;
+
         try
         {
             Directory.CreateDirectory(Dir);

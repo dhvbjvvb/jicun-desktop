@@ -40,10 +40,22 @@ public sealed partial class PreviewWindow : Window
         var icon = Path.Combine(AppContext.BaseDirectory, "Assets", "jicun.ico");
         if (File.Exists(icon)) AppWindow.SetIcon(icon);
 
+        // 关掉窗口时得从 Opened 里摘掉自己，所以提前挂上 —— 下面那条提前返回的路也走得到。
+        Closed += OnClosed;
+
+        // 相对地址 / 非法地址交给 new Uri 就是抛异常，而预览这条入口没人接异常，进程直接没。
+        // 正常的调用方（解析页的预览按钮）已经被 CanPreview 挡住了，这里再兜一层。
+        if (AsAbsolute(item.Url) is not { } url)
+        {
+            TitleText.Text = "地址不可用：" + item.Url;
+            Resize(480, 260);
+            return;
+        }
+
         if (item.Kind == MediaKind.Image)
         {
             ImageHost.Visibility = Visibility.Visible;
-            var bitmap = new BitmapImage(new Uri(item.Url));
+            var bitmap = new BitmapImage(url);
             bitmap.ImageOpened += (_, _) => FitImage(bitmap.PixelWidth, bitmap.PixelHeight);
             Picture.Source = bitmap;
             // ponytail: 滚动容器用无限约束量内容，Image 会按位图像素尺寸铺开，缩放 1.0 也塞不进视口。
@@ -55,27 +67,29 @@ public sealed partial class PreviewWindow : Window
         else
         {
             Player.Visibility = Visibility.Visible;
-            Player.Source = MediaSource.CreateFromUri(new Uri(item.Url));
+            Player.Source = MediaSource.CreateFromUri(url);
 
             if (item.Kind == MediaKind.Audio)
             {
                 // 播放器条按固定高度摆在下面，剩下的地方留给封面。
                 PlayerRow.Height = new GridLength(140);
-                if (!string.IsNullOrWhiteSpace(item.ThumbnailUrl))
+                // 封面地址同样得是绝对的，不然 new BitmapImage 也抛
+                if (AsAbsolute(item.ThumbnailUrl) is { } cover)
                 {
-                    Backdrop.Source = new BitmapImage(new Uri(item.ThumbnailUrl!));
+                    Backdrop.Source = new BitmapImage(cover);
                     Backdrop.Visibility = Visibility.Visible;
                 }
                 Resize(560, 460);
             }
             else
             {
+                // 视频要铺满整个内容区：Player 在 XAML 里是 Grid.Row=1，而那一行只有音频分支
+                // 才撑到 140 —— 光 SetRowSpan 的话它还是待在底下那条 Auto 行里（一条矮条）。
+                Grid.SetRow(Player, 0);
                 Grid.SetRowSpan(Player, 2);
                 Resize(1120, 680);
             }
         }
-
-        Closed += OnClosed;
     }
 
     /// <summary>打开（或把已经开着的那个拎到前面）。</summary>
@@ -175,4 +189,10 @@ public sealed partial class PreviewWindow : Window
 
         Resize((int)(pixelWidth * scale), (int)(pixelHeight * scale) + (int)TitleBar.ActualHeight);
     }
+    /// <summary>
+    /// 只有绝对地址才配交给 <c>new Uri</c>：相对地址（服务端兜底那条路会下发以 / 开头的）会抛
+    /// <c>UriFormatException</c>，而调用这条链的都是一碰就崩的 void 事件处理器。
+    /// </summary>
+    private static Uri? AsAbsolute(string? url) =>
+        Uri.TryCreate(url, UriKind.Absolute, out var uri) ? uri : null;
 }

@@ -19,7 +19,6 @@ public sealed class ResumeRecord
     public bool SupportsRange { get; set; }
 
     [JsonIgnore] public string SinglePath => ResumeStore.PathFor(Id + ".part");
-    [JsonIgnore] public string MergedPath => ResumeStore.PathFor(Id + ".merged");
 
     public string PartPath(int index) => ResumeStore.PathFor(Id + "." + index);
 
@@ -113,7 +112,7 @@ public static class ResumeStore
     {
         TryDelete(PathFor(id + ".json"));
         TryDelete(PathFor(id + ".part"));
-        TryDelete(PathFor(id + ".merged"));
+        TryDelete(PathFor(id + ".merged")); // 旧版本的合并结果落在这儿，顺手清掉
         for (var i = 0; i < Segments; i++) TryDelete(PathFor(id + "." + i));
     }
 

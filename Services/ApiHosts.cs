@@ -135,6 +135,18 @@ public static class ApiHosts
 
     private static string _current = BuiltIn[0];
 
+    /// <summary>
+    /// 只给排障 / 自检用的入口覆盖：设了环境变量 <c>JICUN_HOSTS</c>（逗号分隔）就**只**用这几个
+    /// 入口，顺序即优先级。它存在的意义是能把「第一个入口不通时到底会不会去试下一个」演出来 ——
+    /// 平时域名池里全是自己的真实域名、个个都会答话，那几条分支根本触发不到。
+    /// 正经跑起来不该设它（和 JICUN_UPSTREAM_KEY / JICUN_UPDATE_MANIFEST 同一种用法）。
+    /// 注意它只覆盖候选表，不动 <see cref="Current"/>（绝对/相对地址的拼接仍按当前域名来）。
+    /// </summary>
+    private static readonly string[] Override = SplitHosts(Environment.GetEnvironmentVariable("JICUN_HOSTS"));
+
+    private static string[] SplitHosts(string? raw) =>
+        (raw ?? string.Empty).Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
     public static string Current => _current;
 
     /// <summary>服务端下发过的域名候选。</summary>
@@ -163,6 +175,7 @@ public static class ApiHosts
 
     /// <summary>
     /// 候选顺序：<c>[当前, ...内置, ...服务端下发]</c>，去重。
+    /// 设了 <c>JICUN_HOSTS</c> 时**只**返回它给的那几个（顺序即优先级），不掺真实域名。
     /// </summary>
     /// <remarks>
     /// 当前域名排第一：它刚成功过。内置域名排在服务端下发之前 —— 下发的域名是从
@@ -178,6 +191,14 @@ public static class ApiHosts
             var v = host.Trim().ToLowerInvariant();
             if (v.Length == 0 || tried.Contains(v)) return;
             tried.Add(v);
+        }
+
+        if (Override.Length > 0)
+        {
+            foreach (var host in Override) Add(host);
+            // 只覆盖不追加：掺进真实域名的话，被覆盖的那几个一失败就会去撞真实服务器，
+            // 「第一个不通会不会试下一个」也就验不准了
+            if (tried.Count > 0) return tried;
         }
 
         Add(Current);
@@ -245,24 +266,46 @@ public static class ServerConfigStore
 
     public static string FilePath => Path.Combine(DirPath, "server-config.json");
 
+    /// <summary>存档的写锁：热更和「解析时命中兜底域名」两条线程都可能写它。</summary>
+    private static readonly object Gate = new();
+
+    /// <summary>本程序认的存档版本。</summary>
+    public const int CurrentSchemaVersion = 1;
+
+    /// <summary>读进来那份存档的版本；没有存档时就是本程序的版本。</summary>
+    private static int _loadedVersion = CurrentSchemaVersion;
+
     private sealed class Snapshot
     {
+        /// <summary>存档结构版本：读到更新的版本就不回写，免得老版本把不认识的字段抹掉。</summary>
+        public int SchemaVersion { get; set; } = CurrentSchemaVersion;
         public string? Current { get; set; }
         public List<string>? RemoteHosts { get; set; }
     }
 
-    /// <summary>落盘。失败静默吞掉：下次照旧走内置兜底，不值得为它打断启动。</summary>
+    /// <summary>
+    /// 落盘。失败静默吞掉：下次照旧走内置兜底，不值得为它打断启动。
+    /// 加锁是因为写入方不止一个（HostUpdater 热更 / ParseService 命中兜底域名），
+    /// 两个线程同时 WriteAllText 同一个文件会让其中一次撞 IOException 被静默吞掉 ——
+    /// 那次可能正好是「刚命中的域名」，冷启动就又退回旧域名了。
+    /// </summary>
     public static void Save()
     {
-        try
+        // 存档来自更新的版本：只写我们认得的字段等于把别的抹掉，宁可不写。
+        if (_loadedVersion > CurrentSchemaVersion) return;
+
+        lock (Gate)
         {
-            Directory.CreateDirectory(DirPath);
-            var snap = new Snapshot { Current = ApiHosts.Current, RemoteHosts = ApiHosts.RemoteHosts.ToList() };
-            File.WriteAllText(FilePath, JsonSerializer.Serialize(snap, new JsonSerializerOptions { WriteIndented = true }));
-        }
-        catch
-        {
-            // 落盘只是优化。
+            try
+            {
+                Directory.CreateDirectory(DirPath);
+                var snap = new Snapshot { Current = ApiHosts.Current, RemoteHosts = ApiHosts.RemoteHosts.ToList() };
+                File.WriteAllText(FilePath, JsonSerializer.Serialize(snap, new JsonSerializerOptions { WriteIndented = true }));
+            }
+            catch
+            {
+                // 落盘只是优化。
+            }
         }
     }
 
@@ -274,6 +317,7 @@ public static class ServerConfigStore
             if (!File.Exists(FilePath)) return;
             var snap = JsonSerializer.Deserialize<Snapshot>(File.ReadAllText(FilePath));
             if (snap is null) return;
+            _loadedVersion = snap.SchemaVersion;
             if (!string.IsNullOrWhiteSpace(snap.Current)) ApiHosts.TrySet(snap.Current);
             if (snap.RemoteHosts is { Count: > 0 }) ApiHosts.SetRemoteHosts(snap.RemoteHosts);
         }
@@ -289,6 +333,7 @@ public static class ServerConfigStore
 /// </summary>
 public sealed class HostUpdater
 {
+    // 固定超时这一层（后台一次性请求，不需要按请求给、也没有整体预算）。
     // 10 秒不是随便给的：冷启动第一次握手（DNS + TLS + Cloudflare）实测能在 6 秒
     // 边界上抖过去，而这条请求是后台 fire-and-forget 的，等久一点不伤任何人的体验；
     // 反过来，误判成「拉不到」就会一直用内置兜底，等于热更白做了。

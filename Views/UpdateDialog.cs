@@ -38,11 +38,17 @@ internal static class UpdateFlow
             if (!manual && UpdateService.IgnoredVersion == latest.Version)
                 return "有新版本 " + latest.Version + "（已忽略）";
 
-            await UpdateDialog.ShowAsync(latest);
+            // 说明以 GitHub Release 正文为准（改说明不用重发版），拿不到才退回清单里那份。
+            // 给 4 秒预算：说明是锦上添花，不能让它把弹窗拖住（离线时两个候选都要等到超时）。
+            using var notesCts = new CancellationTokenSource(TimeSpan.FromSeconds(4));
+            var notes = await UpdateService.FetchNotesAsync(latest.Version, notesCts.Token);
+            await UpdateDialog.ShowAsync(latest, notes);
             return "有新版本 " + latest.Version;
         }
-        catch
+        catch (Exception ex)
         {
+            // 别闷声吞掉：弹窗渲染之类的意外在 Debug 输出里留一条，下次好定位
+            Debug.WriteLine("检查更新失败：" + ex);
             return "检查更新失败，请稍后再试";
         }
         finally
@@ -58,22 +64,25 @@ internal static class UpdateFlow
 /// </summary>
 internal static class UpdateDialog
 {
-    public static async Task ShowAsync(UpdateManifest manifest)
+
+    // 弹窗尺寸固定，不跟着说明长短变：说明区就这么大，超了在里面滚
+    private const double DialogWidth = 620;
+    private const double DialogHeight = 520;
+    private const double NotesWidth = 560;
+    private const double NotesHeight = 320;
+
+    public static async Task ShowAsync(UpdateManifest manifest, string? notes)
     {
         var root = await WaitForRootAsync();
         if (root is null) return;
 
-        var notes = new TextBlock
-        {
-            Text = string.IsNullOrWhiteSpace(manifest.Notes) ? "（本次发布没有写更新说明）" : manifest.Notes.Trim(),
-            TextWrapping = TextWrapping.Wrap,
-            IsTextSelectionEnabled = true,
-        };
-
+        // 说明只认 GitHub Release 正文（清单里不再放说明）；拿不到就是空，Markdown.Build 会给一句占位
         var scroll = new ScrollViewer
         {
-            Content = notes,
-            MaxHeight = 320,
+            Content = Markdown.Build(notes),
+            Width = NotesWidth,
+            Height = NotesHeight,
+            VerticalScrollMode = ScrollMode.Enabled,
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
         };
 
@@ -104,8 +113,15 @@ internal static class UpdateDialog
             DefaultButton = ContentDialogButton.Primary,
             XamlRoot = root,
         };
-        dialog.Resources["ContentDialogMaxWidth"] = 620d;
-        dialog.Resources["ContentDialogMaxHeight"] = 640d;
+        // 宽高都写死（Min = Max）：说明长短不该让弹窗忽大忽小，超长就在说明区里滚
+        dialog.MinWidth = DialogWidth;
+        dialog.MaxWidth = DialogWidth;
+        dialog.MinHeight = DialogHeight;
+        dialog.MaxHeight = DialogHeight;
+        dialog.Resources["ContentDialogMinWidth"] = DialogWidth;
+        dialog.Resources["ContentDialogMaxWidth"] = DialogWidth;
+        dialog.Resources["ContentDialogMinHeight"] = DialogHeight;
+        dialog.Resources["ContentDialogMaxHeight"] = DialogHeight;
 
         // 忽略：只忽略这一个版本。比它高的版本照样会弹，手动检查也照样能再看到它。
         dialog.SecondaryButtonClick += (_, _) => UpdateService.SetIgnored(manifest.Version);

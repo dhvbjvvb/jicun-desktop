@@ -41,6 +41,8 @@ internal static class Cli
                     return await HostsAsync().ConfigureAwait(false);
                 case "--secrets":
                     return SecretsCommand();
+                case "--selftest":
+                    return SelfCheck.Run();
                 case "--help" or "-h" or "--?":
                     PrintHelp();
                     return 0;
@@ -282,6 +284,7 @@ internal static class Cli
         Console.WriteLine("  Jicun.exe --parse <链接或分享文案>                      只看解析结果");
         Console.WriteLine("  Jicun.exe --hosts                                    拉一次 /ips.json，看域名热更结果");
         Console.WriteLine("  Jicun.exe --secrets                                  看上游直连密钥配没配");
+        Console.WriteLine("  Jicun.exe --selftest                                 跑一遍纯逻辑自检（不联网、不开界面）");
         Console.WriteLine("  Jicun.exe --apply-update --pid 进程 --from 新目录 --to 安装目录   覆盖安装（更新流程内部调用）");
         Console.WriteLine();
         Console.WriteLine("  --download 追加：--kind video|image|audio 按类型落到设置页对应的目录（默认 video）");

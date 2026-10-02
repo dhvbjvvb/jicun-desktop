@@ -1,4 +1,6 @@
 using System.Net.Http;
+using System.Net.Sockets;
+using System.Security.Authentication;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Jicun.Desktop.Models;
@@ -19,13 +21,22 @@ namespace Jicun.Desktop.Services;
 /// </summary>
 public sealed class ParseService
 {
-    private static readonly HttpClient Http = new();
+    // 超时一律由**调用方**按请求给（见 GetAsync 里那个 linked CTS）：上游 12 秒 / 兜底每域名
+    // 20 秒 / 兜底总预算 25 秒，三种都不一样。别在这里设 HttpClient.Timeout —— 那是个全局上限，
+    // 会把「按请求给的超时」悄悄压到它下面，排查起来很难看（这也是另外几个 HttpClient 的规矩）。
+    private static readonly HttpClient Http = new() { Timeout = Timeout.InfiniteTimeSpan };
 
     // 整段分享文案也能解析：从里面挑第一条链接出来
     private static readonly Regex UrlRegex = new(@"https?://[^\s，。、（）()【】\[\]""'<>|]+", RegexOptions.Compiled);
 
     // 兜底那条路的超时。media-parser 要打第三方平台，给宽一点。
     private static readonly TimeSpan FallbackTimeout = TimeSpan.FromSeconds(20);
+
+    /// <summary>
+    /// 整趟兜底的总预算。每个域名各给 20 秒，但「一个都不通」不能叠成 20×N 秒 ——
+    /// 用户盯着转圈等半分钟，最后等到的只是一句「网络连接失败」。
+    /// </summary>
+    private static readonly TimeSpan FallbackBudget = TimeSpan.FromSeconds(25);
 
     // 上游那条路的超时，比兜底短：这条路失败还要接着走兜底，两次串起来不能让用户
     // 等 40 秒。上游自己也打第三方平台，常态 1~3 秒。
@@ -101,11 +112,15 @@ public sealed class ParseService
                 LastRoute = LastRoute + "→fallback";
                 return await FinalizeAsync(result, ct).ConfigureAwait(false);
             }
-            catch (ParseException)
+            catch (ParseException fallbackError)
             {
-                // 兜底也挂了：抛上游那句更准确 —— 它多半是「链接失效」「平台不支持」
-                // 这类真实原因，兜底只会说「服务器异常」。
-                throw upstreamError ?? new ParseException("解析失败，换个链接或稍后再试");
+                // 两边都挂了，挑最有用的那句给用户：**内容级**那句才是真实原因（「链接失效」
+                // 「平台不支持」）；传输级的「服务器异常 / 网络连接失败」换个时间还能成。
+                // 上游的内容级结论最权威（它真正认得这条链接），所以它排最前面。
+                if (upstreamError is { Failure: ParseFailure.Content }) throw upstreamError;
+                if (fallbackError.Failure == ParseFailure.Content) throw;   // 就是它，裸 throw 保住堆栈
+                if (upstreamError is not null) throw upstreamError;
+                throw;                                                       // 兜底自己的传输级失败
             }
         }
 
@@ -155,29 +170,56 @@ public sealed class ParseService
         return result;
     }
 
-    /// <summary>media-parser 那条路：按域名池逐个试，通了就记住。</summary>
+    /// <summary>
+    /// media-parser 那条路：按域名池逐个试，通了就记住。
+    /// 单个域名最多 <see cref="FallbackTimeout"/>，整趟不超过 <see cref="FallbackBudget"/>。
+    /// </summary>
     private async Task<ParseResult> FallbackAsync(string url, CancellationToken ct)
     {
         Exception? last = null;
+        var deadline = DateTime.UtcNow + FallbackBudget;
+
         foreach (var host in ApiHosts.Candidates())
         {
+            var remaining = deadline - DateTime.UtcNow;
+            if (remaining <= TimeSpan.Zero)
+            {
+                // 预算用完就收尾，但**不要**拿一句通用的「解析超时」把手头最真实的原因盖掉：
+                // 上一个域名到底为什么没成（域名解析不了 / TLS 被重置 / 它自己超时），
+                // 那就是这次该告诉用户的实话。
+                break;
+            }
+
+            var timeout = remaining < FallbackTimeout ? remaining : FallbackTimeout;
+
             try
             {
                 var endpoint = "https://" + host + "/parse?url=" + Uri.EscapeDataString(url);
-                var bytes = await GetAsync(endpoint, null, FallbackTimeout, ct).ConfigureAwait(false);
+                var bytes = await GetAsync(endpoint, null, timeout, ct).ConfigureAwait(false);
 
                 // 这个域名通（哪怕应答是 400），记住它：后面的请求就不用再从头试。
-                ApiHosts.TrySet(host);
+                // 别忘了落盘 —— 只改内存的话，冷启动又会从内置域名一个个试起。
+                if (ApiHosts.TrySet(host)) ServerConfigStore.Save();
                 return ParseBody(bytes, fromUpstream: false, platformLabel: "");
             }
             catch (TimeoutException)
             {
-                last = new ParseException("解析超时，请重试");
+                last = new ParseException("解析超时，请重试", ParseFailure.Transport);
             }
-            catch (ParseException)
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
-                // 服务器其实答了，只是答的是失败 —— 换域名也是一样的失败，别白试。
+                // 用户按了取消：这不是「这个域名不通」，不能接着试下一个
                 throw;
+            }
+            catch (ParseException ex) when (ex.Failure == ParseFailure.Content)
+            {
+                // 服务器给了明确结论（链接失效 / 平台不支持）：换域名也是一样的答案，别白试。
+                throw;
+            }
+            catch (ParseException ex)
+            {
+                // 传输级失败（网关错误页 / 429 / 应答不像 JSON）：是这个入口坏了，接着试下一个。
+                last = ex;
             }
             catch (Exception ex)
             {
@@ -185,7 +227,13 @@ public sealed class ParseService
             }
         }
 
-        throw new ParseException("网络连接失败：" + (last?.Message ?? "未知错误"));
+        // last 就是最后一个域名的真实失败原因（DNS / TLS / 超时…）。一次都没试成走不到这里：
+        // 候选表至少有当前域名和内置域名，第一轮必有域名拿到机会。
+        // 界面上只露中文那句话；原始异常挂在内层，排障时还捞得到。
+        if (last is ParseException known) throw known;
+        throw last is null
+            ? new ParseException("网络连接失败", ParseFailure.Transport)
+            : new ParseException(DescribeTransport(last), ParseFailure.Transport, last);
     }
 
     /// <summary>
@@ -216,15 +264,21 @@ public sealed class ParseService
         }
         catch (TimeoutException error)
         {
-            throw new ParseException(error.Message);
+            throw new ParseException(error.Message, ParseFailure.Transport);
         }
         catch (ParseException)
         {
             throw;
         }
-        catch
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            throw new ParseException("网络连接失败，请检查网络后重试");
+            // 用户按了取消：绝不能翻成「网络连接失败」—— 那样会被当成「上游这条路失败」，
+            // 接着再跑一趟兜底，取消就白按了。
+            throw;
+        }
+        catch (Exception error)
+        {
+            throw new ParseException(DescribeTransport(error), ParseFailure.Transport, error);
         }
 
         return ParseBody(bytes, fromUpstream, platformLabel);
@@ -256,18 +310,33 @@ public sealed class ParseService
 
         using (response)
         {
-            if ((int)response.StatusCode == 429) throw new ParseException("请求太频繁，请稍后再试");
+            // 429 也算传输级：限流多半按账号或出口算，换域名不一定有用，但也不该让一个域名
+            // 把整条路判死 —— 一次快速失败，最多多打一次而已。
+            if ((int)response.StatusCode == 429)
+                throw new ParseException("请求太频繁，请稍后再试", ParseFailure.Transport);
 
-            var bytes = await response.Content.ReadAsByteArrayAsync(linked.Token).ConfigureAwait(false);
+            byte[] bytes;
+            try
+            {
+                bytes = await response.Content.ReadAsByteArrayAsync(linked.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                // 收 body 的途中超时：和发请求超时一样要能换下一个域名再试，
+                // 也不能让「A task was canceled.」这种原文漏到界面上。
+                throw new TimeoutException("解析超时，请重试");
+            }
 
             // 非 JSON 响应（网关错误页之类）只能靠状态码说话。这里只做一次探测，
             // 真正的解析在 ParseBody 里；不探测的话「HTML 错误页」会被说成
             // 「服务器异常（200）」，前后矛盾。
             if (!IsJson(bytes))
             {
+                // 网关错误页 / 反代吐的 HTML：属于「这个入口的链路有问题」，换个域名再试有意义。
                 throw new ParseException((int)response.StatusCode == 200
                     ? "返回内容无法识别"
-                    : "服务器异常（" + (int)response.StatusCode + "），请稍后再试");
+                    : "服务器异常（" + (int)response.StatusCode + "），请稍后再试",
+                    ParseFailure.Transport);
             }
 
             return bytes;
@@ -281,16 +350,54 @@ public sealed class ParseService
         catch { return null; }
     }
 
+    /// <summary>
+    /// 应答看起来是不是 JSON。只看第一个非空白字符是不是 <c>{</c> / <c>[</c> —— 这里要问的
+    /// 只是「网关吐的是不是一张 HTML 错误页」。别为它先把整份应答解一遍：调用方拿到字节后
+    /// 马上还会在 <see cref="ParseBody"/> 里真正解一次，两次全量解析等于白花一倍 CPU。
+    /// 开头是 <c>{</c> 但内容坏掉的，仍然会被 ParseBody 判成「返回内容无法识别」。
+    /// </summary>
     private static bool IsJson(byte[] bytes)
     {
-        try { using var doc = JsonDocument.Parse(bytes); return true; }
-        catch { return false; }
+        var at = 0;
+        if (bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF) at = 3; // BOM
+
+        for (; at < bytes.Length; at++)
+        {
+            var b = bytes[at];
+            if (b is (byte)' ' or (byte)'\t' or (byte)'\r' or (byte)'\n') continue;
+            return b is (byte)'{' or (byte)'[';
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// 把传输层的异常翻成中文人话 —— 界面上不该出现 .NET 的英文原文（那句话对用户没意义）。
+    /// **必须挖到最内层**：HttpRequestException 自己只会说「发送请求时出错」，
+    /// 真正的病因在 InnerException 里（TLS 握手失败 / 连不上 / 超时）。
+    /// 原始异常会被挂到 <see cref="ParseException"/> 的内层，要排障时还捞得出来。
+    /// </summary>
+    internal static string DescribeTransport(Exception error)
+    {
+        var cause = error;
+        while (cause.InnerException is { } inner) cause = inner;
+
+        return cause switch
+        {
+            AuthenticationException => "安全连接建立失败（域名可能被阻断，或中间有代理 / 防火墙）",
+            SocketException => "连不上服务器（网络不通，或域名解析不了）",
+            TimeoutException => "请求超时",
+            OperationCanceledException => "请求被取消或超时",
+            IOException => "网络读写中断",
+            _ => "网络连接失败",
+        };
     }
 
     private static ParseResult ParseBody(byte[] bytes, bool fromUpstream, string platformLabel)
     {
+        // 首字节像 JSON 却解不开 = 应答被截断或掺了别的东西：同样归传输级，换个入口可能就好。
         using var doc = DecodeJson(bytes)
-            ?? throw new ParseException("返回内容无法识别");
+            ?? throw new ParseException("返回内容无法识别", ParseFailure.Transport);
 
         var root = doc.RootElement;
 

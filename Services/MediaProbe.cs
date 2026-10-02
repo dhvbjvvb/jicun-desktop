@@ -16,6 +16,7 @@ namespace Jicun.Desktop.Services;
 /// </summary>
 public static class MediaProbe
 {
+    // 超时这一层按请求给（每次探测都自带 linked CTS，5 秒），不走 HttpClient.Timeout。
     private static readonly HttpClient Http = new() { Timeout = Timeout.InfiniteTimeSpan };
 
     // 同一份文件在一次会话里可能被问好几遍（根节点和 video_backup 是同一个片源的不同
@@ -88,7 +89,7 @@ public static class MediaProbe
 
         // 别用 ReadAsByteArrayAsync：服务端可能忽略 Range 直接吐整个文件（几百 MB）。
         // 只读够我们要的那么多就收手。
-        var want = (int)Math.Min(end - start + 1, HeadBytes);
+        var want = ReadBudget(start, end);
         var buffer = new byte[want];
         var filled = 0;
         await using (var stream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false))
@@ -106,6 +107,18 @@ public static class MediaProbe
         if (total <= 0) total = filled;
         return (buffer, total);
     }
+
+    /// <summary>
+    /// 这一次要读多少字节：够覆盖请求的区间就行，但绝不超过一个窗口的上限 ——
+    /// 服务端可能忽略 Range 直接吐整个文件（几百 MB），不能照单全收。
+    /// </summary>
+    /// <remarks>
+    /// 上限必须取<b>两个窗口里大的那个</b>（<see cref="TailBytes"/>）。写死 <see cref="HeadBytes"/>
+    /// 会把 2MB 的尾部窗口截成 1MB，只读到「倒数 2MB 的前一半」，正好跳过压在文件尾的 moov ——
+    /// 而「moov 在文件尾」正是这个类要处理的情况。
+    /// </remarks>
+    internal static int ReadBudget(long start, long end) =>
+        (int)Math.Min(end - start + 1, TailBytes);
 
     /// <summary>在 mp4 顶层盒子找 moov → trak → tkhd，取宽高（16.16 定点）。</summary>
     private static (int Width, int Height)? FindTrackSize(byte[] data)

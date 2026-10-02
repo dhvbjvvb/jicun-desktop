@@ -27,20 +27,69 @@ dotnet build -c Release
 ```
 
 默认自包含（.NET 运行时 + Windows App SDK 运行时都塞进去），解压就能跑，
-代价是 228 MB 目录 / 91 MB zip。加 `-FrameworkDependent` 出 77 MB 的目录，
-但目标机器得先装 .NET 10 桌面运行时和 Windows App SDK 运行时。
+代价是 168 MB 目录 / 66 MB zip —— 这已经是裁掉 Windows App SDK 那套用不上的 AI / 语义搜索 /
+小组件负载之后的体积（`pack.ps1 -SkipTrim` 关掉裁剪会多 60 MB 左右）。加 `-FrameworkDependent`
+出框架依赖的小包，但目标机器得先装 .NET 10 桌面运行时和 Windows App SDK 运行时。
 
 > ⚠️ `dotnet publish` 不会自动带上 `Jicun.pri`，少了它 exe 双击秒崩
 > （退出码 0xC000027B）而且没有任何日志。csproj 里的 `IncludePriInPublish` target
 > 负责把它补进发布清单 —— 别删。`pack.ps1 -Verify` 就是拦这个的。
 
+### 安装器（Inno Setup）
+
+```powershell
+.\pack.ps1 -Installer -Verify     # 打包 + 编译安装器：dist\Jicun-Setup-<版本>.exe
+winget install JRSoftware.InnoSetup   # 没装 Inno Setup 6 的话，先装它（只用 ISCC，不进包）
+```
+
+`installer.iss` 打的是上面那个目录（不是 zip），出来一个约 45 MB 的安装器。几个刻意的选择：
+
+| 决定 | 为什么 |
+| --- | --- |
+| 按用户装（`PrivilegesRequired=lowest` → `%LOCALAPPDATA%\Programs\Jicun`） | 不弹 UAC；而且程序对自己目录有写权限 —— 装在 Program Files 里会让应用内自动更新变成「用不了」 |
+| 欢迎页 + 协议页（`LICENSE`，MIT）里「我接受」**默认选中** | 用户不用多点一下；想拒绝仍可点另一项（`[Code]` 里 `LicenseAcceptedRadio.Checked := True`） |
+| 桌面快捷方式**默认勾选** | `[Tasks]` 的 `checkedonce`：默认勾上，但用户取消过一次之后升级不会偷偷加回来 |
+| 卸载不删用户数据 | 设置 / 历史 / 下载记录都在 `%LOCALAPPDATA%\Jicun`，不归安装器管 |
+| 按钮和页面文案写死中文 | Inno 官方发行包**不带**简体中文语言文件（`ChineseSimplified.isl` 不在里面），所以在 `[Messages]` 里覆盖了用户会走到的那几页；键名写错 ISCC 会在编译期报出来 |
+
+想换成"一个 exe 单文件、不要安装器"，那是另一条路：`dotnet publish -p:PublishSingleFile=true -p:EnableMsixTooling=true`
+（少了 `EnableMsixTooling` 会直接报错）。不压缩 457 MB，加 `-p:EnableCompressionInSingleFile=true` 压到 221 MB，
+实测单独一个 exe 也能正常起界面 —— 但那份没法像绿色包这样裁掉用不上的负载，所以默认还是出绿色包 + 安装器。
+
 ## 更新
 
 启动时后台查一次，设置页也有「检查更新」手动查。检测不看 GitHub API（那接口国内时通时不通，
-还有速率限制），读的是仓库里的静态清单 `update/win-x64.json`：版本、更新说明、下载地址、sha256 都写在里面。
+还有速率限制），读的是仓库里的静态清单 `update/win-x64.json`：版本、下载地址、sha256 都写在里面。
 拉的时候挨个试 GitHub 镜像 —— ghfast.top → gh-proxy.com → 直连 → jsDelivr，第一个通的就用，这就是「检测走 CDN / 镜像」。
 
-有新版就弹公告窗口：上面是更新说明，底下左边「忽略」右边「更新」。
+**更新说明只有一个来源：这个版本的 GitHub Release 正文**（清单里不放说明）——
+从 `api.github.com/repos/dhvbjvvb/jicun-desktop/releases/tags/v<版本>` 取（先试 gh-proxy 镜像再直连；
+实测 ghfast 对 api 路径回 403，它只代理 raw 和附件），给 4 秒预算：拿不到就显示「没有写更新说明」占位，不会把弹窗拖住。
+好处是在网页上改说明，用户下次检查就能看到，不用重发一版。**所以发版必须发 Release**（`release.ps1 -Publish` 或手工建）。
+
+有新版就弹公告窗口：上面是更新说明，底下左边「忽略」右边「更新」。窗口**尺寸固定**（620×520，见 `Views/UpdateDialog.cs` 顶部常量），
+说明区是固定大小的滚动区：不超就正常看，超了在右侧出滚动条上下拉着预览全文。
+
+说明按迷你 Markdown 渲染（`Views/Markdown.cs`，自己写的，不引库）。GitHub 上常用的那几样都认：
+
+| 写法 | 效果 |
+| --- | --- |
+| `#` ~ `######` | 标题（字号递减；`# 标题 #` 尾部井号不算文字） |
+| `**粗**` / `__粗__`、`*斜*` / `_斜_` | 加粗 / 斜体（`file_name_x` 这种词内下划线不当斜体） |
+| `` `代码` `` / `~~删除线~~` / `==高亮==` | 等宽 / 删除线 / 高亮 |
+| `[文字](链接)` / 裸链接 | 链接，**只放行 http / https**、可带 `"标题"`；`https://…` 直接写也能成链接 |
+| `- ` `* ` `+ ` / `1. ` | 无序 / 有序列表，前导空格缩进一级（2 空格） |
+| `- [ ]` / `- [x]` | 任务列表（☐ / ☑） |
+| `> ` | 引用（连续几行合成一段，左侧竖线） |
+| ` ``` ` / `~~~` | 围栏代码块（等宽 + 底色，里面不再解析） |
+| `---` / `***` / `___` | 分隔线 |
+| `\| 表头 \|` + `\|---\|---\|` | 表格（列等分，表头加粗） |
+| `<div align="center">…</div>`、`<center>…</center>`、`<br>` | 居中 / 换行（GitHub 网页也认，同一份说明两边看着都对） |
+
+不做图片（要联网抓图）、HTML 实体与其它 HTML 标签、列表里套引用。
+实现上有两个坑值得记一笔：高亮走 WinUI 的 `TextHighlighters`（按字符区间刷底色）—— WinUI 3 的 `InlineUIContainer` 一用就抛异常，
+`Run` 又没有 `Background`，而 `TextHighlighter` 不认笔刷的 `Opacity`（会刷成纯色），所以底/字色都写死（金底黑字，深色主题也看得清）；
+删除线用 `Run.TextDecorations`（`TextElement` 上有这个属性，能按片段划）。
 
 - 「忽略」只忽略**这一个版本**：用户现在 1.0.0、忽略掉 1.0.1，下次检出 1.0.1 就不再打扰；
   等出了 1.0.2 照样弹。手动点「检查更新」时一律照弹，让他还能改主意。
@@ -66,7 +115,6 @@ dotnet build -c Release
 ```json
 {
   "version": "1.0.1",
-  "notes": "修了解析时闪退；设置页加了检查更新。",
   "url": "https://github.com/dhvbjvvb/jicun-desktop/releases/download/v1.0.1/Jicun-win-x64.zip",
   "sha256": "（64 位十六进制）",
   "size": 95834112,
@@ -86,6 +134,7 @@ dotnet build -c Release
 | `Jicun.exe --parse <链接或整段分享文案>` | 只看解析结果，并打印走的是哪条路 |
 | `Jicun.exe --hosts` | 拉一次 /ips.json，看域名热更结果 |
 | `Jicun.exe --secrets` | 看上游直连密钥配没配 |
+| `Jicun.exe --selftest` | 自检（真实应答映射 / 清晰度去重 / 图集去重 / 域名白名单边界 / 音频标签字节级往返），不联网、不开界面；音频那组会在 `%TEMP%` 造几个临时文件再删掉 |
 | `Jicun.exe --apply-update --pid 进程号 --from 新目录 --to 安装目录` | 等主程序退出后覆盖安装并重启（更新流程内部用，别手敲） |
 | `Jicun.exe --help` | 用法 |
 
@@ -94,10 +143,14 @@ dotnet build -c Release
 | 路径 | 干什么的 |
 | --- | --- |
 | Jicun.Desktop.csproj | 单工程。net10.0-windows10.0.19041.0 / win-x64。含 IncludePriInPublish |
-| pack.ps1 | 自包含 publish + zip；`-Verify` 打完启动一次验包 |
+| pack.ps1 | 自包含 publish + 裁掉用不上的 AI / 语义搜索负载 + zip；`-Verify` 打完启动一次验包，`-Installer` 再编译安装器 |
+| installer.iss | Inno Setup 安装器脚本：按用户装、欢迎页 + 协议（默认已接受）、桌面快捷方式默认勾选、中文文案 |
 | release.ps1 | 发版：改版本号 → 打包 → 算 sha256 → 写 update/<运行时>.json → 可选 gh release create |
-| update/<运行时>.json | 发版清单：版本 / 更新说明 / 下载地址 / sha256。客户端检测的就是它 |
+| update/<运行时>.json | 发版清单：版本 / 下载地址 / sha256。客户端检测的就是它（**更新说明不在里面**） |
 | Program.cs / Cli.cs | 入口分流：有参数走命令行，没参数起界面 |
+| SelfCheck.cs | 命令行自检的断言（`--selftest`）：跑真实应答 fixture、纯逻辑边界、音频标签字节级往返 |
+| Views/SelectableList.cs | 下载页 / 历史页共用的「选择 / 全选 / 删除」状态机（原来两边各抄一份） |
+| .github/workflows/ci.yml | 门槛：编译 + 跑 `--selftest`（判定只看退出码） |
 | MainWindow.xaml(.cs) | 自绘标题栏 + 左侧 NavigationView + 应用图标 |
 | Models/MediaModels.cs | MediaItem / VideoVariant / ParseResult，含解析应答的字段映射 |
 | Services/ParseService.cs | 两条路：上游聚合直连（先试）+ media-parser（兜底）；判成败、取错误文案 |
@@ -115,7 +168,8 @@ dotnet build -c Release
 | Services/UpdateService.cs | 检查更新：拉清单（镜像 / CDN）、下载、sha256 校验、解压、起安装进程 |
 | Services/UpdateInstaller.cs | 被 `--apply-update` 调起来：等主程序退出 → 覆盖安装 → 重启新版 |
 | Views/ | 解析、下载、历史、设置四个页面 + 预览对话框 |
-| Views/UpdateDialog.cs | 更新公告窗口（更新说明 + 进度条），以及检查更新的编排 |
+| Views/UpdateDialog.cs | 更新公告窗口（固定尺寸 + 说明区滚动 + 进度条），以及检查更新的编排（含去 Release 取说明） |
+| Views/Markdown.cs | 更新说明用的迷你 Markdown：解析（纯函数，自检离线可验）+ 渲染成控件 |
 | Converters/ | URL 字符串 → Image.Source（x:Bind 不做隐式转换） |
 
 ## 已实现
@@ -129,10 +183,14 @@ dotnet build -c Release
   只给了 `quality:"original"` 或 `"原画"` 又没宽高的（快手），就去读视频文件头里的真实宽高
   （快手那条标着原画的其实和它 720p 档同为 1600x704 → `704P`）。
   探测只挑标签里没数字的档，最多 3 个、整体 6 秒，失败就保留原标签 —— 它只是锦上添花，绝不能让解析失败。
+- 一次解析最多等 25 秒：上游那条 12 秒 + 兜底域名池一个总预算。解析按钮在跑的时候变「取消」——
+  域名一个都不通的时候，没这个出口用户只能干等。
 - 预览：图片 / 视频 / 音频三种，都走 ContentDialog；视频音频用 MediaPlayerElement
   （原生 HLS + 自带传输控件），图片可缩放。
 - 下载：3 路并发，单文件大于 8MB 走 4 段 Range 并行，每段最多重试 2 次，
   落盘后按文件头修正后缀，重名自动加序号；进程重启后能接着下。
+  分片留在 `%LOCALAPPDATA%\\Jicun\\incomplete`，合并出来的整份文件直接落在**目标目录**里再改名 ——
+  下载目录在别的盘时，不会在最后一步把整份文件再拷一遍。
 - 音频下载完自动写 ID3 / MP4 标签（标题、作者、专辑、封面）。
   写标签要整份文件读进内存再原子替换，可能失败 —— 那时文件已经下好了，所以写不进去只吞掉，不判下载失败。
 - 域名热更：启动后台拉一次 /ips.json，换域名、取平台白名单、存本地。
@@ -159,6 +217,19 @@ dotnet build -c Release
 - MSIX 打包与签名。现在是绿色包，解压即用（自动更新已经做了，见上面「更新」）。
 - 上游应答里 `.m3u8` 的清晰度会被丢掉（下载器不做 HLS 分片拼接），与 Android 版一致。
 
+
+## 超时
+
+分三层，别混着用（每个 `HttpClient` 用哪一层都写在它自己的注释里）：
+
+| 层 | 给谁用 | 怎么给 |
+| --- | --- | --- |
+| 固定超时 | 小请求、一次性的：发版清单、`/ips.json` | `HttpClient.Timeout` |
+| 请求级 | 解析：上游 12 秒 / 兜底每个域名 20 秒（按剩余预算截断） | 每次请求现建 linked CTS |
+| 整体预算 | 兜底域名池整趟 25 秒、更新包下载整趟 20 分钟 | 一处 CTS 管一整趟 |
+
+下载和媒体探测在这层不设上限（`Timeout.InfiniteTimeSpan`）：大文件绝不能被固定超时掐死，
+它们的上限由调用处的 CTS（整体预算）或「每段自己的重试」给。
 ## 配置
 
 | 东西 | 在哪 |
@@ -169,6 +240,9 @@ dotnet build -c Release
 | 忽略的版本 | %LOCALAPPDATA%\Jicun\update-state.json |
 | 更新包缓存 / 解压目录 | %LOCALAPPDATA%\Jicun\update\（装完自动清；`--apply-update` 的日志是 update.log） |
 | 上游密钥 | 默认值在本机私有的 LocalDefaults.cs（不进仓库，仓库里只有空占位）；覆盖：环境变量 `JICUN_UPSTREAM_KEY` / `JICUN_UPSTREAM_BASE`，或 %LOCALAPPDATA%\\Jicun\\secrets.json |
+| 更新清单地址 | 覆盖：环境变量 `JICUN_UPDATE_MANIFEST`（自建镜像 / 本机调试用）。设了就**只走它**，不再试别的候选 |
+| Release 说明地址 | 覆盖：环境变量 `JICUN_RELEASE_API`（排障 / 自检用）。设了就只走它；指到本机 JSON 文件即可离线演练「弹窗里显示什么」 |
+| 兜底域名池（**只给排障用**） | 覆盖：环境变量 `JICUN_HOSTS`（逗号分隔，顺序即优先级）。设了就只走这几个入口 —— 用来演「第一个入口不通时会不会试下一个」这类平时触发不到的分支（平时池里全是自己的真实域名，个个都会答话） |
 
 默认值放在 `Services\LocalDefaults.cs`（本机私有，仓库里没有这个文件，只有值全空的
 LocalDefaults.Fallback.cs），环境变量和 secrets.json 仍然优先，换 key 不必重新构建。

@@ -169,7 +169,9 @@
                                         <FontIcon Glyph="{x:Bind Glyph}" FontSize="28"
                                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
-                                        <Image Stretch="Uniform" Source="{x:Bind ThumbnailUrl, Converter={StaticResource UrlToImage}}" />
+                                        <!-- 456 = 格子宽 228 的两倍：缩略图按原图整张解码，一张就白吃几十 MB 内存 -->
+                                        <Image Stretch="Uniform"
+                                               Source="{x:Bind ThumbnailUrl, Converter={StaticResource UrlToImage}, ConverterParameter=456}" />
                                     </Grid>
 
                                     <StackPanel Grid.Row="1" Padding="10,8,10,0" Spacing="2">

@@ -21,6 +21,11 @@ public sealed partial class ParsePage : Page
     private bool _busy;
     private ParseResult? _last;
 
+    // 正在跑的那一次解析：跑的时候解析按钮变「取消」—— 兜底那条路最坏要等十几秒，
+    // 不给个出口用户只能干等。_parsing 是「先掐掉上一次、再起新的一次」用的把手。
+    private CancellationTokenSource? _parse;
+    private Task? _parsing;
+
     // 音频单独一张卡：播放器按需创建，换页或重新解析时拆掉。
     private MediaItem? _audio;
     private MediaPlayer? _audioPlayer;
@@ -43,7 +48,7 @@ public sealed partial class ParsePage : Page
         if (AppServices.PendingInput is not { Length: > 0 } pending) return;
         AppServices.PendingInput = null;
         InputBox.Text = pending;
-        _ = ParseAsync();
+        _ = StartParseAsync();
     }
 
     protected override void OnNavigatedFrom(NavigationEventArgs e)
@@ -70,14 +75,32 @@ public sealed partial class ParsePage : Page
     {
         if (e.Key != VirtualKey.Enter) return;
         e.Handled = true;
-        _ = ParseAsync();
+        _ = StartParseAsync();
     }
 
-    private void OnParseClick(object sender, RoutedEventArgs e) => _ = ParseAsync();
-
-    private async Task ParseAsync()
+    /// <summary>跑着的时候这个按钮是「取消」，否则起一次新的解析。</summary>
+    private void OnParseClick(object sender, RoutedEventArgs e)
     {
-        if (_busy) return;
+        if (_busy)
+        {
+            CancelParse();
+            return;
+        }
+
+        _ = StartParseAsync();
+    }
+
+    /// <summary>
+    /// 起一次解析。已经有一次在跑（历史页带新链接回来、用户连点）就先掐掉、等它把界面状态
+    /// 交还，再起新的 —— 直接 return 会让「重新解析」点了没反应。
+    /// </summary>
+    private async Task StartParseAsync()
+    {
+        if (_parsing is { } previous)
+        {
+            CancelParse();
+            try { await previous; } catch { /* 收尾在它自己的 finally 里 */ }
+        }
 
         var input = InputBox.Text?.Trim() ?? "";
         if (input.Length == 0)
@@ -86,19 +109,56 @@ public sealed partial class ParsePage : Page
             return;
         }
 
+        // 从这一行到 RunParseAsync 之间不能有 await：_busy 是先同步置位的重入闸，
+        // 消息循环进不来，界面状态不会被第二次调用抢走。
+        var cts = new CancellationTokenSource();
+        _parse = cts;
         _busy = true;
-        ParseButton.IsEnabled = false;
+        ParseButton.IsEnabled = true;      // 留着当「取消」用
+        ParseButton.Content = "取消";
         InputBox.IsEnabled = false;
         Ring.IsActive = true;
         Bar.IsOpen = false;
 
+        var run = RunParseAsync(input, cts.Token);
+        _parsing = run;
+
         try
         {
-            var result = await AppServices.Parser.ParseAsync(input);
+            await run;
+        }
+        finally
+        {
+            if (ReferenceEquals(_parsing, run))
+            {
+                _parsing = null;
+                _parse = null;
+                _busy = false;
+            }
+            cts.Dispose();
+        }
+    }
+
+    /// <summary>掐掉正在跑的那次解析。</summary>
+    private void CancelParse()
+    {
+        try { _parse?.Cancel(); } catch { /* 已经收尾了 */ }
+    }
+
+    /// <summary>真正跑一次解析，界面状态的收尾也在这里。</summary>
+    private async Task RunParseAsync(string input, CancellationToken ct)
+    {
+        try
+        {
+            var result = await AppServices.Parser.ParseAsync(input, ct);
             _last = result;
             Render(result);
             AppServices.History.Add(ParseService.ExtractUrl(input) ?? input, result);
             ShowBar(InfoBarSeverity.Success, "解析完成，共 " + TotalCount + " 项可下载");
+        }
+        catch (OperationCanceledException)
+        {
+            ShowBar(InfoBarSeverity.Informational, "已取消");
         }
         catch (ParseException ex)
         {
@@ -110,7 +170,7 @@ public sealed partial class ParsePage : Page
         }
         finally
         {
-            _busy = false;
+            ParseButton.Content = "解析";
             ParseButton.IsEnabled = true;
             InputBox.IsEnabled = true;
             Ring.IsActive = false;

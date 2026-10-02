@@ -11,6 +11,9 @@
         <StackPanel Spacing="20" MaxWidth="820" HorizontalAlignment="Left">
 
             <TextBlock Text="设置" Style="{StaticResource TitleTextBlockStyle}" />
+            <!-- 选目录失败时在这儿说一句：原来失败是静默的，用户只会觉得「点了没反应」 -->
+            <InfoBar x:Name="ErrorBar" IsOpen="False" IsClosable="True" Severity="Error" />
+
 
             <StackPanel Spacing="8">
                 <TextBlock Text="保存位置" Style="{StaticResource BodyStrongTextBlockStyle}" />

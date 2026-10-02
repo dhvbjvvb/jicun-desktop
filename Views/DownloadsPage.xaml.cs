@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
 using System.Diagnostics;
 using Jicun.Desktop.Models;
 using Jicun.Desktop.Services;
@@ -11,18 +12,31 @@ public sealed partial class DownloadsPage : Page
 {
     public ObservableCollection<DownloadTask> Tasks => AppServices.Downloads.Tasks;
 
-    /// <summary>是不是在「勾选 / 删除」模式。默认关着，这时候只有「选择」能点。</summary>
-    private bool _picking;
+    /// <summary>「选择 / 全选 / 删除」那套跟历史页共用，见 <see cref="SelectableList{T}"/>。</summary>
+    private readonly SelectableList<DownloadTask> _picking;
 
     public DownloadsPage()
     {
         InitializeComponent();
-        Tasks.CollectionChanged += (_, _) =>
-        {
-            UpdateEmptyHint();
-            UpdateSelectAllButton();
-        };
+
+        _picking = new SelectableList<DownloadTask>(
+            TaskList, SelectButton, SelectAllButton, DeleteButton,
+            count: () => Tasks.Count,
+            delete: AppServices.Downloads.Remove);
+
         UpdateEmptyHint();
+
+        // 页面没设 NavigationCacheMode，每次导航都是新实例，而集合是 AppServices 里的单例：
+        // 只在 Loaded 订阅、Unloaded 退订 —— 否则每进一次下载页就把上一页钉在订阅表里，
+        // 泄页，而且列表一变死页也跟着回调。
+        Loaded += (_, _) => Tasks.CollectionChanged += OnTasksChanged;
+        Unloaded += (_, _) => Tasks.CollectionChanged -= OnTasksChanged;
+    }
+
+    private void OnTasksChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        UpdateEmptyHint();
+        _picking.Refresh();
     }
 
     private void UpdateEmptyHint() =>
@@ -46,50 +60,15 @@ public sealed partial class DownloadsPage : Page
     private void OnOpenFolderClick(object sender, RoutedEventArgs e) =>
         Reveal(Tasks.FirstOrDefault()?.Folder ?? AppServices.FolderFor(MediaKind.Video));
 
-    // ---- 选择 / 全选 / 删除 ----
+    // ---- 选择 / 全选 / 删除：逻辑都在 SelectableList 里，这里只转发 ----
 
-    /// <summary>「选择」是个开关：点开进勾选模式（按钮变「完成」），再点一下就退出。</summary>
-    private void OnSelectClick(object sender, RoutedEventArgs e) => SetPicking(!_picking);
+    private void OnSelectClick(object sender, RoutedEventArgs e) => _picking.Toggle();
 
-    private void SetPicking(bool on)
-    {
-        // 注意顺序：退出勾选模式时必须在把 SelectionMode 切回 None *之前* 清空选中项。
-        // SelectionMode 已经是 None 之后再碰 SelectedItems，WinUI 会抛 COMException(0x8000FFFF)，
-        // 整个进程 fail-fast 直接消失。
-        if (!on && TaskList.SelectedItems.Count > 0) TaskList.SelectedItems.Clear();
+    private void OnSelectAllClick(object sender, RoutedEventArgs e) => _picking.SelectAllOrClear();
 
-        _picking = on;
-        // Multiple 模式下 ListView 自己会给每一行画勾选框，点整行也能勾
-        TaskList.SelectionMode = on ? ListViewSelectionMode.Multiple : ListViewSelectionMode.None;
-        SelectButton.Content = on ? "完成" : "选择";
-        UpdateSelectAllButton();
-        UpdateDeleteButton();
-    }
+    private void OnSelectionChanged(object sender, SelectionChangedEventArgs e) => _picking.Refresh();
 
-    /// <summary>全选和取消全选是同一个按钮：已经全勾上了就全清掉。</summary>
-    private void OnSelectAllClick(object sender, RoutedEventArgs e)
-    {
-        if (Tasks.Count > 0 && TaskList.SelectedItems.Count == Tasks.Count) TaskList.SelectedItems.Clear();
-        else TaskList.SelectAll();
-        UpdateDeleteButton();
-    }
-
-    private void OnSelectionChanged(object sender, SelectionChangedEventArgs e) => UpdateDeleteButton();
-
-    private void OnDeleteClick(object sender, RoutedEventArgs e)
-    {
-        var picked = TaskList.SelectedItems.Cast<DownloadTask>().ToList();
-        if (picked.Count == 0) return;
-
-        TaskList.SelectedItems.Clear();
-        AppServices.Downloads.Remove(picked);
-        if (Tasks.Count == 0) SetPicking(false);
-        UpdateDeleteButton();
-    }
-
-    private void UpdateSelectAllButton() => SelectAllButton.IsEnabled = _picking && Tasks.Count > 0;
-
-    private void UpdateDeleteButton() => DeleteButton.IsEnabled = _picking && TaskList.SelectedItems.Count > 0;
+    private void OnDeleteClick(object sender, RoutedEventArgs e) => _picking.DeleteSelected();
 
     private static void Reveal(string path)
     {
