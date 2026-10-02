@@ -28,6 +28,21 @@ jobs:
         run: dotnet build -c Release -nologo
 
       - name: 自检
+        # 别写 `.\Jicun.exe --selftest` 再看 $LASTEXITCODE：Jicun.exe 是 WinExe（GUI 子系统），
+        # 在没有交互控制台的 runner 上 PowerShell 不保证等它、也不保证给 $LASTEXITCODE，
+        # 于是 `if ($LASTEXITCODE -ne 0)` 会被判成真 —— 2026-10-02 那次 run 就是这么红的：
+        # 报「自检没过（exit ）」退出码是空的，而且一条断言输出都没留下，等于白红一次。
+        # Start-Process -Wait 明确等它，输出重定向到文件再打出来，判定看进程自己的退出码。
         run: |
-          .\bin\Release\net10.0-windows10.0.19041.0\win-x64\Jicun.exe --selftest
-          if ($LASTEXITCODE -ne 0) { throw "自检没过（exit $LASTEXITCODE）" }
+          $exe = ".\bin\Release\net10.0-windows10.0.19041.0\win-x64\Jicun.exe"
+          if (-not (Test-Path $exe)) { throw "找不到 $exe —— 编译那步没产出可执行文件？" }
+
+          $out = Join-Path $env:TEMP "selftest.out"
+          $err = Join-Path $env:TEMP "selftest.err"
+          $p = Start-Process -FilePath $exe -ArgumentList "--selftest" -NoNewWindow -Wait -PassThru -RedirectStandardOutput $out -RedirectStandardError $err
+
+          Get-Content $out -ErrorAction SilentlyContinue
+          $stderr = Get-Content $err -ErrorAction SilentlyContinue
+          if ($stderr) { Write-Host "---- stderr ----"; $stderr }
+
+          if ($p.ExitCode -ne 0) { throw "自检没过（exit $($p.ExitCode)）" }
