@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Page
+    x:Class="Jicun.Desktop.Views.HistoryPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:services="using:Jicun.Desktop.Services"
+    xmlns:conv="using:Jicun.Desktop.Converters"
+    mc:Ignorable="d">
+
+    <Page.Resources>
+        <conv:UrlToImageSourceConverter x:Key="UrlToImage" />
+    </Page.Resources>
+
+    <Grid Padding="24,16,24,24" RowDefinitions="Auto,*">
+
+        <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+            <TextBlock Text="历史" Style="{StaticResource TitleTextBlockStyle}" />
+            <Button x:Name="SelectButton" Content="选择" Click="OnSelectClick" />
+            <Button x:Name="SelectAllButton" Content="全选" Click="OnSelectAllClick" IsEnabled="False" />
+            <Button x:Name="DeleteButton" Content="删除" Click="OnDeleteClick" IsEnabled="False" />
+            <Button Content="清空" Click="OnClearClick" />
+        </StackPanel>
+
+        <Grid Grid.Row="1" Margin="0,16,0,0">
+            <TextBlock
+                x:Name="EmptyHint"
+                Text="还没有解析记录。"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+
+            <ListView
+                x:Name="HistoryList"
+                ItemsSource="{x:Bind Entries}"
+                SelectionMode="None"
+                IsItemClickEnabled="True"
+                ItemClick="OnItemClick"
+                SelectionChanged="OnSelectionChanged">
+                <ListView.ItemTemplate>
+                    <DataTemplate x:DataType="services:HistoryEntry">
+                        <Border
+                            Margin="0,0,0,8"
+                            Padding="14"
+                            CornerRadius="8"
+                            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                            BorderThickness="1">
+                            <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12">
+                                <Grid
+                                    Grid.Column="0"
+                                    Width="108"
+                                    Height="60"
+                                    CornerRadius="6"
+                                    Background="{ThemeResource SubtleFillColorSecondaryBrush}">
+                                    <FontIcon
+                                        Glyph="&#xE91B;"
+                                        FontSize="20"
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        HorizontalAlignment="Center"
+                                        VerticalAlignment="Center" />
+                                    <!-- 和解析页一致：整图缩放，不裁不放大 -->
+                                    <Image
+                                        Stretch="Uniform"
+                                        Source="{x:Bind CoverUrl, Converter={StaticResource UrlToImage}}" />
+                                </Grid>
+
+                                <StackPanel Grid.Column="1" Spacing="4" VerticalAlignment="Center">
+                                    <!-- 和解析页一致：最多两行，多余的省略号 -->
+                                    <TextBlock Text="{x:Bind Headline}" FontWeight="SemiBold"
+                                               TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis" />
+                                    <StackPanel Orientation="Horizontal" Spacing="12">
+                                        <TextBlock Text="{x:Bind TimeLabel}" Style="{StaticResource CaptionTextBlockStyle}"
+                                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                        <TextBlock Text="{x:Bind Platform}" Style="{StaticResource CaptionTextBlockStyle}"
+                                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                        <TextBlock Text="{x:Bind Summary}" Style="{StaticResource CaptionTextBlockStyle}"
+                                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                    </StackPanel>
+                                    <TextBlock Text="{x:Bind Url}" Style="{StaticResource CaptionTextBlockStyle}"
+                                               Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                               TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
+                                </StackPanel>
+
+                                <TextBlock Grid.Column="2" Text="重新解析" VerticalAlignment="Center"
+                                           Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                            </Grid>
+                        </Border>
+                    </DataTemplate>
+                </ListView.ItemTemplate>
+            </ListView>
+        </Grid>
+    </Grid>
+</Page>

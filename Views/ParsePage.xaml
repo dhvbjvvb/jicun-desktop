@@ -1,0 +1,198 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Page
+    x:Class="Jicun.Desktop.Views.ParsePage"
+    NavigationCacheMode="Required"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:models="using:Jicun.Desktop.Models"
+    xmlns:conv="using:Jicun.Desktop.Converters"
+    mc:Ignorable="d">
+
+    <Page.Resources>
+        <conv:UrlToImageSourceConverter x:Key="UrlToImage" />
+        <conv:BoolToVisibilityConverter x:Key="BoolToVisibility" />
+    </Page.Resources>
+
+    <Grid Padding="24,16,24,24" RowDefinitions="Auto,Auto,*">
+
+        <!-- 输入区 -->
+        <Grid Grid.Row="0" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
+            <TextBox
+                x:Name="InputBox"
+                Grid.Column="0"
+                PlaceholderText="粘贴分享链接，或者整段分享文案"
+                KeyDown="OnInputKeyDown" />
+            <Button Grid.Column="1" Content="粘贴" Click="OnPasteClick" />
+            <Button
+                x:Name="ParseButton"
+                Grid.Column="2"
+                Content="解析"
+                Style="{StaticResource AccentButtonStyle}"
+                Click="OnParseClick" />
+        </Grid>
+
+        <!-- 状态条 + 结果头；「下载全部」已经挪进结果网格的第一个格子 -->
+        <Grid Grid.Row="1">
+            <StackPanel>
+                <StackPanel Orientation="Horizontal" Spacing="12" Margin="0,12,0,0" VerticalAlignment="Center">
+                    <ProgressRing x:Name="Ring" Width="18" Height="18" IsActive="False" />
+                    <InfoBar
+                        x:Name="Bar"
+                        IsOpen="False"
+                        IsClosable="True"
+                        Severity="Informational"
+                        MinWidth="320" />
+                </StackPanel>
+
+                <StackPanel x:Name="ResultHead" Margin="0,16,0,0" Spacing="4" Visibility="Collapsed">
+                    <!-- 顶部只留 2 行，其余省略号；完整内容看下面「文案」卡片 -->
+                    <TextBlock x:Name="TitleText" Style="{StaticResource SubtitleTextBlockStyle}" TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis" />
+                    <StackPanel Orientation="Horizontal" Spacing="12">
+                        <TextBlock x:Name="MetaText" Style="{StaticResource CaptionTextBlockStyle}"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <TextBlock x:Name="CountText" Style="{StaticResource CaptionTextBlockStyle}"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    </StackPanel>
+                </StackPanel>
+            </StackPanel>
+        </Grid>
+
+        <!-- 结果区 -->
+        <ScrollViewer Grid.Row="2" Margin="0,16,0,0" Padding="0,0,12,0">
+            <StackPanel Spacing="16">
+
+                <Border
+                    x:Name="DescCard"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8"
+                    Padding="16"
+                    Visibility="Collapsed">
+                    <StackPanel Spacing="8">
+                        <Grid ColumnDefinitions="*,Auto">
+                            <TextBlock Text="文案" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                            <Button Grid.Column="1" Content="复制" Click="OnCopyDescClick" Padding="8,2,8,2" />
+                        </Grid>
+                        <!-- 文案固定高度，长了在右边出滚动条 -->
+                        <ScrollViewer Height="120" VerticalScrollBarVisibility="Auto" Padding="0,0,8,0">
+                            <TextBlock x:Name="DescText" TextWrapping="Wrap" IsTextSelectionEnabled="True" />
+                        </ScrollViewer>
+                    </StackPanel>
+                </Border>
+
+                <!-- 音频单独一张卡：进度 + 播放，右侧下载 -->
+                <Border
+                    x:Name="AudioCard"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8"
+                    Padding="16,12,16,12"
+                    Visibility="Collapsed">
+                    <StackPanel Spacing="8">
+                        <TextBlock Text="音频" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                        <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="12">
+                        <Button
+                            x:Name="AudioPlayButton"
+                            Grid.Column="0"
+                            Width="40"
+                            Height="40"
+                            Padding="0"
+                            VerticalAlignment="Center"
+                            Click="OnAudioPlayClick">
+                            <FontIcon x:Name="AudioPlayIcon" Glyph="&#xE768;" FontSize="16" />
+                        </Button>
+                        <Slider
+                            x:Name="AudioSeek"
+                            Grid.Column="1"
+                            Minimum="0"
+                            Maximum="1"
+                            StepFrequency="0.1"
+                            VerticalAlignment="Center"
+                            ValueChanged="OnAudioSeekValueChanged" />
+                        <TextBlock
+                            x:Name="AudioTime"
+                            Grid.Column="2"
+                            Text="--:-- / --:--"
+                            VerticalAlignment="Center"
+                            Style="{StaticResource CaptionTextBlockStyle}"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <Button
+                            Grid.Column="3"
+                            Content="下载"
+                            Click="OnAudioDownloadClick"
+                            Padding="10,2,10,2"
+                            VerticalAlignment="Center" />
+                        </Grid>
+                    </StackPanel>
+                </Border>
+
+                <TextBlock
+                    x:Name="EmptyHint"
+                    Text="解析结果会出现在这里。"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+
+                <GridView
+                    x:Name="ItemsList"
+                    ItemsSource="{x:Bind Items}"
+                    SelectionMode="None"
+                    IsItemClickEnabled="False">
+                    <GridView.ItemTemplate>
+                        <DataTemplate x:DataType="models:MediaItem">
+                            <Grid Width="228" Height="272" Margin="0,0,4,4">
+                                <!-- 「下载全部」占位卡：就占结果网格的第一个格子 -->
+                                <Border
+                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="8"
+                                    Visibility="{x:Bind IsDownloadAll, Converter={StaticResource BoolToVisibility}}">
+                                    <Button
+                                        Content="下载全部"
+                                        Click="OnDownloadAllClick"
+                                        Style="{StaticResource AccentButtonStyle}"
+                                        HorizontalAlignment="Center"
+                                        VerticalAlignment="Center" />
+                                </Border>
+
+                                <Border
+                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="8"
+                                    Visibility="{x:Bind IsMediaItem, Converter={StaticResource BoolToVisibility}}">
+                                    <Grid RowDefinitions="150,*,Auto">
+                                    <Grid Grid.Row="0" CornerRadius="8,8,0,0" Background="{ThemeResource SubtleFillColorSecondaryBrush}">
+                                        <FontIcon Glyph="{x:Bind Glyph}" FontSize="28"
+                                                  Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                  HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                        <Image Stretch="Uniform" Source="{x:Bind ThumbnailUrl, Converter={StaticResource UrlToImage}}" />
+                                    </Grid>
+
+                                    <StackPanel Grid.Row="1" Padding="10,8,10,0" Spacing="2">
+                                        <TextBlock Text="{x:Bind Subtitle}" Style="{StaticResource CaptionTextBlockStyle}"
+                                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                        <!-- 标题给两行，别一截了之；悬停也不再弹链接 -->
+                                        <TextBlock Text="{x:Bind FileName}" TextWrapping="WrapWholeWords" MaxLines="2"
+                                                   TextTrimming="CharacterEllipsis" />
+                                    </StackPanel>
+
+                                    <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="8" Padding="10,6,10,10">
+                                        <Button Content="预览" Click="OnPreviewClick" Padding="10,2,10,2"
+                                                IsEnabled="{x:Bind CanPreview}" />
+                                        <Button Content="下载" Click="OnDownloadClick" Padding="10,2,10,2" />
+                                    </StackPanel>
+                                    </Grid>
+                                </Border>
+                            </Grid>
+                        </DataTemplate>
+                    </GridView.ItemTemplate>
+                </GridView>
+
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
+</Page>

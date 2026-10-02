@@ -1,0 +1,16 @@
+// 复制成 Services\LocalDefaults.cs（那份被 .gitignore 排除，不会进仓库），把值填上。
+// 填完直接构建即可 —— csproj 会自动把仓库里的 LocalDefaults.Fallback.cs 排除掉。
+// 密钥和基址可以留空（留空就只走兜底 media-parser），但域名池至少要有一个。
+namespace Jicun.Desktop.Services;
+
+internal static class LocalDefaults
+{
+    /// <summary>上游聚合服务的密钥，请求头 X-API-Key 用它。</summary>
+    internal const string ApiKey = "";
+
+    /// <summary>上游基址，带 scheme，例如 https://api.example.com。</summary>
+    internal const string BaseUrl = "";
+
+    /// <summary>兜底 media-parser 的域名池，顺序即优先级。</summary>
+    internal static readonly string[] Hosts = { "example.com" };
+}

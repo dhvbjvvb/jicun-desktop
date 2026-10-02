@@ -427,3 +427,14 @@ FodyWeavers.xsd
 *.msix
 *.msm
 *.msp
+
+# ---- 即存自己的补充规则 ----
+dist/
+screenshot.png
+
+# 本机私有的内置默认值（上游密钥 / 基址 / 兜底域名），绝不入库
+Services/LocalDefaults.cs
+
+# 内部资料：上游契约、节点域名、真实应答样本
+UPSTREAM.md
+test/fixtures/

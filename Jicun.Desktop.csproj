@@ -1,0 +1,68 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+    <RootNamespace>Jicun.Desktop</RootNamespace>
+    <AssemblyName>Jicun</AssemblyName>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Platforms>x64;ARM64</Platforms>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <UseWinUI>true</UseWinUI>
+    <EnableMsixTooling>false</EnableMsixTooling>
+    <WindowsPackageType>None</WindowsPackageType>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <SelfContained>true</SelfContained>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <!-- 入口点自己写（Program.cs），为了在同一个 exe 里塞一个无界面模式 -->
+    <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
+    <!-- 资源管理器 / 任务栏 / 开始菜单看到的 exe 图标 -->
+    <ApplicationIcon>Assets\jicun.ico</ApplicationIcon>
+    <!-- 客户端拿它跟 GitHub 上的 update/<运行时>.json 比；release.ps1 发版时会改这一行 -->
+    <Version>1.0.0</Version>
+  </PropertyGroup>
+
+  <!--
+    内置默认值（上游密钥 / 基址 / 兜底域名）是本机私货，不进仓库：只要
+    Services\LocalDefaults.cs 在，就用它，把仓库里的空占位从编译里排除。
+    漏了这句排除，两份 LocalDefaults 会同时编译 → CS0101 类型重复定义。
+  -->
+  <ItemGroup>
+    <Compile Remove="Services\LocalDefaults.Fallback.cs" Condition="Exists('Services\LocalDefaults.cs')" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 运行时也要用（AppWindow.SetIcon），光有 ApplicationIcon 只是嵌进 exe 资源 -->
+    <Content Include="Assets\jicun.ico">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <!-- 标题栏左上角的小图标用的就是这张 PNG，漏了它发布版标题栏会变空白 -->
+    <Content Include="Assets\jicun-256.png">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <!--
+    dotnet publish 不会自动带上 XAML 编译器生成的 $(AssemblyName).pri（.xbf 会带，pri 不会）。
+    pri 是被 build 阶段直接写进输出目录的，不在发布清单里。少了它，publish 出来的 exe 一启动
+    就 0xC000027B 静默崩掉 —— 而 build 出来的却能跑，所以很容易漏掉。这里在算完发布清单之后补进去。
+  -->
+  <Target Name="IncludePriInPublish" AfterTargets="ComputeFilesToPublish">
+    <ItemGroup>
+      <ResolvedFileToPublish Include="$(TargetDir)$(AssemblyName).pri">
+        <RelativePath>$(AssemblyName).pri</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+        <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.5.1" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.28000.2705" />
+  </ItemGroup>
+
+</Project>

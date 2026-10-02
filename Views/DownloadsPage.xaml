@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Page
+    x:Class="Jicun.Desktop.Views.DownloadsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:services="using:Jicun.Desktop.Services"
+    mc:Ignorable="d">
+
+    <Grid Padding="24,16,24,24" RowDefinitions="Auto,*">
+
+        <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+            <TextBlock Text="下载" Style="{StaticResource TitleTextBlockStyle}" />
+            <Button x:Name="SelectButton" Content="选择" Click="OnSelectClick" />
+            <Button x:Name="SelectAllButton" Content="全选" Click="OnSelectAllClick" IsEnabled="False" />
+            <Button x:Name="DeleteButton" Content="删除" Click="OnDeleteClick" IsEnabled="False" />
+            <Button Content="全部取消" Click="OnCancelAllClick" />
+            <Button Content="打开保存位置" Click="OnOpenFolderClick" />
+        </StackPanel>
+
+        <Grid Grid.Row="1" Margin="0,16,0,0">
+            <TextBlock
+                x:Name="EmptyHint"
+                Text="还没有下载任务。去「解析」页挑几个吧。"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+
+            <ListView
+                x:Name="TaskList"
+                ItemsSource="{x:Bind Tasks}"
+                SelectionMode="None"
+                SelectionChanged="OnSelectionChanged">
+                <ListView.ItemTemplate>
+                    <DataTemplate x:DataType="services:DownloadTask">
+                        <Border
+                            Margin="0,0,0,8"
+                            Padding="14"
+                            CornerRadius="8"
+                            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                            BorderThickness="1">
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                                <StackPanel Grid.Column="0" Spacing="6" VerticalAlignment="Center">
+                                    <TextBlock
+                                        Text="{x:Bind Title}"
+                                        FontWeight="SemiBold"
+                                        TextWrapping="NoWrap"
+                                        TextTrimming="CharacterEllipsis" />
+                                    <ProgressBar Maximum="1" Value="{x:Bind Progress, Mode=OneWay}" />
+                                    <StackPanel Orientation="Horizontal" Spacing="12">
+                                        <TextBlock Text="{x:Bind StateLabel, Mode=OneWay}" Style="{StaticResource CaptionTextBlockStyle}" />
+                                        <TextBlock Text="{x:Bind SizeLabel, Mode=OneWay}" Style="{StaticResource CaptionTextBlockStyle}"
+                                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                        <TextBlock Text="{x:Bind SpeedLabel, Mode=OneWay}" Style="{StaticResource CaptionTextBlockStyle}"
+                                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                    </StackPanel>
+                                    <TextBlock
+                                        Text="{x:Bind Folder}"
+                                        Style="{StaticResource CaptionTextBlockStyle}"
+                                        Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                        TextWrapping="NoWrap"
+                                        TextTrimming="CharacterEllipsis"
+                                        ToolTipService.ToolTip="{x:Bind Folder}" />
+                                </StackPanel>
+
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                    <Button Content="取消" Click="OnCancelClick" IsEnabled="{x:Bind CanCancel, Mode=OneWay}" />
+                                    <Button Content="打开" Click="OnOpenClick" IsEnabled="{x:Bind CanOpen, Mode=OneWay}" />
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+                    </DataTemplate>
+                </ListView.ItemTemplate>
+            </ListView>
+        </Grid>
+    </Grid>
+</Page>

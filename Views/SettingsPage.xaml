@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Page
+    x:Class="Jicun.Desktop.Views.SettingsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <ScrollViewer Padding="24,16,24,24">
+        <StackPanel Spacing="20" MaxWidth="820" HorizontalAlignment="Left">
+
+            <TextBlock Text="设置" Style="{StaticResource TitleTextBlockStyle}" />
+
+            <StackPanel Spacing="8">
+                <TextBlock Text="保存位置" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                <TextBlock
+                    Text="三类内容各存各的，可以分别指定文件夹。"
+                    Style="{StaticResource CaptionTextBlockStyle}"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+
+                <Grid
+                    Margin="0,4,0,0"
+                    ColumnDefinitions="56,*,Auto,Auto"
+                    RowDefinitions="Auto,Auto,Auto"
+                    ColumnSpacing="8"
+                    RowSpacing="8">
+
+                    <TextBlock Grid.Row="0" Grid.Column="0" Text="视频" VerticalAlignment="Center" />
+                    <TextBox x:Name="VideoBox" Grid.Row="0" Grid.Column="1" IsReadOnly="True" />
+                    <Button Grid.Row="0" Grid.Column="2" Content="选择..." Click="OnPickClick" Tag="video" />
+                    <Button Grid.Row="0" Grid.Column="3" Content="打开" Click="OnOpenClick" Tag="video" />
+
+                    <TextBlock Grid.Row="1" Grid.Column="0" Text="图片" VerticalAlignment="Center" />
+                    <TextBox x:Name="ImageBox" Grid.Row="1" Grid.Column="1" IsReadOnly="True" />
+                    <Button Grid.Row="1" Grid.Column="2" Content="选择..." Click="OnPickClick" Tag="image" />
+                    <Button Grid.Row="1" Grid.Column="3" Content="打开" Click="OnOpenClick" Tag="image" />
+
+                    <TextBlock Grid.Row="2" Grid.Column="0" Text="音频" VerticalAlignment="Center" />
+                    <TextBox x:Name="AudioBox" Grid.Row="2" Grid.Column="1" IsReadOnly="True" />
+                    <Button Grid.Row="2" Grid.Column="2" Content="选择..." Click="OnPickClick" Tag="audio" />
+                    <Button Grid.Row="2" Grid.Column="3" Content="打开" Click="OnOpenClick" Tag="audio" />
+                </Grid>
+
+                <TextBlock
+                    Text="实况图下载下来是视频文件，和「视频」共用同一个位置。"
+                    Style="{StaticResource CaptionTextBlockStyle}"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+            </StackPanel>
+
+            <StackPanel Spacing="8">
+                <TextBlock Text="支持的平台" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                <TextBlock
+                    Text="今日头条、抖音、快手、微信公众号、微信视频号、小红书、哔哩哔哩（无水印视频）、豆包、汽水音乐（仅免费音乐）、微博、皮皮搞笑、皮皮虾、最右、好看视频、西瓜视频"
+                    TextWrapping="Wrap"
+                    Style="{StaticResource CaptionTextBlockStyle}"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+            </StackPanel>
+
+            <StackPanel Spacing="8">
+                <TextBlock Text="开源地址（点击可复制）" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                <HyperlinkButton x:Name="RepoButton" Content="https://github.com/dhvbjvvb/jicun-desktop"
+                                 Click="OnCopyRepoClick" Padding="0" FontSize="16" />
+            </StackPanel>
+
+            <StackPanel Spacing="8">
+                <TextBlock Text="更新" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                <TextBlock
+                    Text="每次启动都会自动查一次有没有新版，也可以在这里手动查。检测走 GitHub 镜像 / CDN，国内也能用；下载完先校验再静默覆盖安装。"
+                    TextWrapping="Wrap"
+                    Style="{StaticResource CaptionTextBlockStyle}"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                <StackPanel Orientation="Horizontal" Spacing="12" Margin="0,4,0,0">
+                    <Button x:Name="CheckUpdateButton" Content="检查更新" Click="OnCheckUpdateClick" />
+                    <TextBlock
+                        x:Name="UpdateStatusText"
+                        VerticalAlignment="Center"
+                        Style="{StaticResource CaptionTextBlockStyle}"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                </StackPanel>
+            </StackPanel>
+
+            <StackPanel Spacing="8">
+                <TextBlock Text="关于" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                <TextBlock x:Name="VersionText" Style="{StaticResource CaptionTextBlockStyle}"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                <TextBlock
+                    Text="解析走自建媒体解析服务，只做链接解析与下载。"
+                    Style="{StaticResource CaptionTextBlockStyle}"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+            </StackPanel>
+
+            <StackPanel Spacing="8">
+                <TextBlock Text="免责声明" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                <TextBlock
+                    Text="本项目仅供学习与技术交流使用，请勿用于商业用途。解析与下载的内容版权归原作者所有，请自行确认拥有相应权利后再保存或传播，因使用本工具产生的一切后果由使用者自行承担。"
+                    TextWrapping="Wrap"
+                    Style="{StaticResource CaptionTextBlockStyle}"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+            </StackPanel>
+
+        </StackPanel>
+    </ScrollViewer>
+</Page>
