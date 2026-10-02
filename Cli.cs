@@ -170,9 +170,10 @@ internal static class Cli
         if (Secrets.ApiKey.Length > 0) return 0;
 
         Console.WriteLine();
-        Console.WriteLine("内置默认值本来就和 Android 版一致，理论上不该走到这里。要覆盖就：");
-        Console.WriteLine("  1. 环境变量  JICUN_UPSTREAM_KEY / JICUN_UPSTREAM_BASE（最高优先）");
+        Console.WriteLine("还没配上游密钥。配法，前者优先：");
+        Console.WriteLine("  1. 环境变量  JICUN_UPSTREAM_KEY / JICUN_UPSTREAM_BASE");
         Console.WriteLine("  2. 写进上面的配置文件：{\"upstreamKey\": \"…\", \"upstreamBase\": \"https://…\"}");
+        Console.WriteLine("  3. 或复制 Services\\LocalDefaults.cs.example 成 LocalDefaults.cs，填上再重新构建");
         return 1;
     }
 
