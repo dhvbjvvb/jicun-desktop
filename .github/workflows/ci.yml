@@ -23,11 +23,11 @@ jobs:
           dotnet-version: '10.0.x'
 
       - name: 编译（Release）
-        working-directory: jicun-desktop
+        # 仓库根就是工程根（Jicun.Desktop.csproj 在仓库根上），别写 working-directory: jicun-desktop ——
+        # 那是本地开发时的目录布局，GitHub 上没这一层，写了第一步就 cd 失败
         run: dotnet build -c Release -nologo
 
       - name: 自检
-        working-directory: jicun-desktop
         run: |
           .\bin\Release\net10.0-windows10.0.19041.0\win-x64\Jicun.exe --selftest
           if ($LASTEXITCODE -ne 0) { throw "自检没过（exit $LASTEXITCODE）" }
