@@ -1,0 +1,9 @@
+# 换行统一成 LF。
+#
+# 这台机器 core.autocrlf=true，而仓库里原来没有这个文件，于是每次 git add 都刷一遍
+# 「LF will be replaced by CRLF」的警告：工作区是 LF、git 却打算 checkout 成 CRLF。
+# 换台机器 clone 出来真被改成 CRLF，再提交就是整文件级的假 diff。
+#
+# text=auto 让 git 自己判断是不是文本（Assets 里的 ico / png 不会被碰），
+# eol=lf 指定落盘统一用 LF；.gitattributes 的优先级高于 core.autocrlf。
+* text=auto eol=lf
