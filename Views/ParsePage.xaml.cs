@@ -324,8 +324,34 @@ public sealed partial class ParsePage : Page
         player.MediaEnded += OnAudioMediaEnded;
         player.PlaybackSession.PlaybackStateChanged += OnAudioStateChanged;
         player.PlaybackSession.PositionChanged += OnAudioPositionChanged;
-        player.Source = MediaSource.CreateFromUri(new Uri(_audio.Url));
         _audioPlayer = player;
+        _ = LoadAudioAsync(player, _audio.Url);
+    }
+
+    /// <summary>
+    /// 给播放器装音频源。B 站那条音频直链要求 Referer，而系统媒体栈只会带自己的 UA、
+    /// 加不了 Referer，直接 <c>CreateFromUri</c> 拿到的就是 403（「音频预览不了」就是这么来的）——
+    /// 这类地址先由我们自己的请求缓冲成本地文件再播；别的平台照旧直接播，不白等一次下载。
+    /// </summary>
+    private async Task LoadAudioAsync(MediaPlayer player, string url)
+    {
+        if (!MediaHttp.NeedsBiliReferer(url))
+        {
+            player.Source = MediaSource.CreateFromUri(new Uri(url));
+            return;
+        }
+
+        try
+        {
+            ShowBar(InfoBarSeverity.Informational, "正在缓冲音频…");
+            var path = await MediaHttp.BufferToTempAsync(url, ".m4a", CancellationToken.None);
+            if (_audioPlayer != player) return;   // 用户已经换了结果，这份别再塞进去
+            player.Source = MediaSource.CreateFromUri(new Uri(path));
+        }
+        catch (Exception ex)
+        {
+            ShowBar(InfoBarSeverity.Error, "音频加载失败：" + ex.Message);
+        }
     }
 
     private void OnAudioDownloadClick(object sender, RoutedEventArgs e)

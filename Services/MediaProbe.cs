@@ -72,6 +72,7 @@ public static class MediaProbe
     private static async Task<(byte[] Body, long Total)?> RangeAsync(string url, long start, long end, CancellationToken ct)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        MediaHttp.Apply(request, url);
         request.Headers.TryAddWithoutValidation("Range", "bytes=" + start + "-" + end);
 
         using var response = await Http

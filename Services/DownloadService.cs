@@ -380,6 +380,7 @@ public sealed class DownloadService
     private static async Task<(long? Length, bool SupportsRange)> ProbeAsync(string url, CancellationToken ct)
     {
         using var req = new HttpRequestMessage(HttpMethod.Get, url);
+        MediaHttp.Apply(req, url);
         req.Headers.Range = new RangeHeaderValue(0, 0);
         using var resp = await Http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
 
@@ -402,6 +403,7 @@ public sealed class DownloadService
             try
             {
                 using var req = new HttpRequestMessage(HttpMethod.Get, rec.Url);
+                MediaHttp.Apply(req, rec.Url);
                 if (done > 0)
                 {
                     if (supportsRange) req.Headers.Range = new RangeHeaderValue(done, null);
@@ -503,6 +505,7 @@ public sealed class DownloadService
             try
             {
                 using var req = new HttpRequestMessage(HttpMethod.Get, rec.Url);
+                MediaHttp.Apply(req, rec.Url);
                 req.Headers.Range = new RangeHeaderValue(start, to);
                 using var resp = await Http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
                 resp.EnsureSuccessStatusCode();

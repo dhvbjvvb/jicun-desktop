@@ -30,6 +30,9 @@ public partial class App : Application
 
         // 上次更新留下的残骸顺手清掉，再后台查一次有没有新版（查到就弹公告窗口）
         UpdateService.CleanupOldArtifacts();
+
+        // 音频预览缓冲（%LOCALAPPDATA%\Jicun\preview）是临时文件，不是用户数据，启动顺手清掉
+        MediaHttp.CleanPreviewCache();
         _ = UpdateFlow.RunAsync(manual: false);
     }
 }
