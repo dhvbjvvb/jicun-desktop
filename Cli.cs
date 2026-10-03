@@ -35,8 +35,6 @@ internal static class Cli
                     return await DownloadAsync(args).ConfigureAwait(false);
                 case "--parse" or "-p":
                     return await ParseAsync(args).ConfigureAwait(false);
-                case "--apply-update":
-                    return ApplyUpdate(args);
                 case "--hosts":
                     return await HostsAsync().ConfigureAwait(false);
                 case "--secrets":
@@ -245,36 +243,6 @@ internal static class Cli
         return "download.bin";
     }
 
-    /// <summary>
-    /// 把 staging 里的新版本覆盖到安装目录上，再把新版拉起来。
-    /// 更新流程是用**新版自己**的 exe 起这个进程的，所以这里必须自己等主程序退干净 ——
-    /// 不等的话一堆文件还占着，拷不动。
-    /// </summary>
-    private static int ApplyUpdate(string[] args)
-    {
-        int? pid = null;
-        string? from = null;
-        string? to = null;
-
-        for (var i = 1; i < args.Length; i++)
-        {
-            switch (args[i].ToLowerInvariant())
-            {
-                case "--pid": pid = int.TryParse(Next(args, ref i), out var value) ? value : null; break;
-                case "--from": from = Next(args, ref i); break;
-                case "--to": to = Next(args, ref i); break;
-            }
-        }
-
-        if (pid is null || string.IsNullOrWhiteSpace(from) || string.IsNullOrWhiteSpace(to))
-        {
-            Console.Error.WriteLine("用法：Jicun.exe --apply-update --pid <进程号> --from <解压目录> --to <安装目录>");
-            return 2;
-        }
-
-        return UpdateInstaller.Apply(pid.Value, from, to);
-    }
-
     private static void PrintHelp()
     {
         Console.WriteLine("即存 · 命令行模式");
@@ -285,7 +253,6 @@ internal static class Cli
         Console.WriteLine("  Jicun.exe --hosts                                    拉一次 /ips.json，看域名热更结果");
         Console.WriteLine("  Jicun.exe --secrets                                  看上游直连密钥配没配");
         Console.WriteLine("  Jicun.exe --selftest                                 跑一遍纯逻辑自检（不联网、不开界面）");
-        Console.WriteLine("  Jicun.exe --apply-update --pid 进程 --from 新目录 --to 安装目录   覆盖安装（更新流程内部调用）");
         Console.WriteLine();
         Console.WriteLine("  --download 追加：--kind video|image|audio 按类型落到设置页对应的目录（默认 video）");
         Console.WriteLine("                    --audio 当音频下（写完会补 ID3/MP4 标签）");

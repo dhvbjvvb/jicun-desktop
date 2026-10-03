@@ -139,7 +139,7 @@ public static class ApiHosts
     /// 只给排障 / 自检用的入口覆盖：设了环境变量 <c>JICUN_HOSTS</c>（逗号分隔）就**只**用这几个
     /// 入口，顺序即优先级。它存在的意义是能把「第一个入口不通时到底会不会去试下一个」演出来 ——
     /// 平时域名池里全是自己的真实域名、个个都会答话，那几条分支根本触发不到。
-    /// 正经跑起来不该设它（和 JICUN_UPSTREAM_KEY / JICUN_UPDATE_MANIFEST 同一种用法）。
+    /// 正经跑起来不该设它（和 JICUN_UPSTREAM_KEY / JICUN_RELEASE_API 同一种用法）。
     /// 注意它只覆盖候选表，不动 <see cref="Current"/>（绝对/相对地址的拼接仍按当前域名来）。
     /// </summary>
     private static readonly string[] Override = SplitHosts(Environment.GetEnvironmentVariable("JICUN_HOSTS"));

@@ -337,9 +337,9 @@ internal static class SelfCheck
         CheckEqual("1.2.3-beta.1 取 1.2.3", new Version(1, 2, 3), UpdateService.ParseVersion("1.2.3-beta.1"));
         Check("解不出来的返回 null", UpdateService.ParseVersion("最新版") is null);
 
-        Check("64 位十六进制才算 sha256", UpdateManifest.IsSha256(new string('a', 64)));
-        Check("短的不算", !UpdateManifest.IsSha256("abc"));
-        Check("非十六进制不算", !UpdateManifest.IsSha256(new string('z', 64)));
+        Check("64 位十六进制才算 sha256", UpdateService.IsSha256(new string('a', 64)));
+        Check("短的不算", !UpdateService.IsSha256("abc"));
+        Check("非十六进制不算", !UpdateService.IsSha256(new string('z', 64)));
 
         var id = ResumeStore.IdFor("https://cdn/v.mp4", "文件名.mp4");
         Check("同一个链接 + 同一个名字 = 同一份断点", id == ResumeStore.IdFor("https://cdn/v.mp4", "文件名.mp4"));
@@ -714,24 +714,24 @@ internal static class SelfCheck
         return entries;
     }
 
-    // ---- 自更新：校验 / 解压 / 覆盖安装（只在临时目录里造现场，不碰真实安装目录） ----
+    // ---- 自更新：校验 + 静默安装参数（只在临时目录里造现场，不碰真实安装目录） ----
 
     /// <summary>
-    /// 更新链路里最危险的是最后一步「用新版覆盖自己」——出问题用户就打不开程序了。
-    /// 这里把不依赖网络的那三段走一遍：sha256 校验、zip 解到 staging、覆盖拷贝（含一个失败用例）。
-    /// 下载那一段要真实发版地址，不在这测。
+    /// 更新链路现在是「下安装器 exe → 校验 sha256 → 静默跑它」。不依赖网络就能验的有两处：
+    /// sha256 判定，以及静默参数（少了 /SILENT，用户面前会弹一个安装向导；少了
+    /// /CLOSEAPPLICATIONS，正在运行的自己被占着，装不进去）。
+    /// 「这份是不是安装器装的」要真装一次才知道，不在这测。
     /// </summary>
     private static void UpdateFlowShape()
     {
-        Console.WriteLine("自更新（校验 / 解压 / 覆盖安装）");
+        Console.WriteLine("自更新（校验 / 静默安装参数）");
 
         var dir = Path.Combine(Path.GetTempPath(), "jicun-selftest-update-" + Environment.ProcessId);
         try
         {
             Directory.CreateDirectory(dir);
             VerifyCase(dir);
-            ExtractCase(dir);
-            ApplyCase(dir);
+            SetupShape();
         }
         catch (Exception ex)
         {
@@ -758,59 +758,28 @@ internal static class SelfCheck
         Check("文件不在就拒绝", !UpdateService.VerifyAsync(Path.Combine(dir, "nope.bin"), hash).GetAwaiter().GetResult());
     }
 
-    private static void ExtractCase(string dir)
+    /// <summary>
+    /// 静默安装器的参数：必须真静默（/SILENT）、别弹框（/SUPPRESSMSGBOXES）、别重启系统
+    /// （/NORESTART），并且让安装器自己去处理文件占用（/CLOSEAPPLICATIONS）—— 少了它，
+    /// 正在运行的自己还占着 exe，装不进去。
+    /// 另外验一下「目录判等」：那份判断决定绿色版会不会被误判成安装版（跑安装器等于凭空多一份）。
+    /// </summary>
+    private static void SetupShape()
     {
-        var zip = Path.Combine(dir, "payload.zip");
-        using (var archive = ZipFile.Open(zip, ZipArchiveMode.Create))
-        {
-            var entry = archive.CreateEntry("Jicun.dll");
-            using var writer = new StreamWriter(entry.Open());
-            writer.Write("fake binary");
-        }
+        var args = UpdateService.SetupArguments;
 
-        // 版本号故意用假值：真发版是 1.2.3 这种，撞不上它自己的 staging 目录
-        var staging = UpdateService.Extract(zip, "0.0.0-selftest");
-        Check("zip 解到独立目录", File.Exists(Path.Combine(staging, "Jicun.dll")));
+        Check("/SILENT（静默，不弹向导）", args.Contains("/SILENT"));
+        Check("/SUPPRESSMSGBOXES（后台更新别被弹框卡住）", args.Contains("/SUPPRESSMSGBOXES"));
+        Check("/NORESTART（不重启系统）", args.Contains("/NORESTART"));
+        Check("/CLOSEAPPLICATIONS（自己还占着文件也装得下去）", args.Contains("/CLOSEAPPLICATIONS"));
+        Check("不传 /DIR（交给安装器认上次装到哪儿）",
+            args.All(a => !a.StartsWith("/DIR", StringComparison.OrdinalIgnoreCase)));
 
-        // 同一个版本再解一次：上次没装完的残骸要能被清掉（Extract 里是先删再建）
-        var again = UpdateService.Extract(zip, "0.0.0-selftest");
-        Check("同版本重复解压不留残骸", again == staging && File.Exists(Path.Combine(again, "Jicun.dll")));
-
-        try { Directory.Delete(staging, true); } catch { /* 清掉自己造的那份 */ }
-    }
-
-    private static void ApplyCase(string dir)
-    {
-        var from = Path.Combine(dir, "new");
-        var to = Path.Combine(dir, "installed");
-        BuildTree(from);
-
-        // pid 用一个不可能存在的：Apply 拿不到进程就当「主程序已经退干净了」，
-        // 不会真去等那 60 秒，也不会有真进程被它等
-        var code = UpdateInstaller.Apply(int.MaxValue, from, to);
-        CheckEqual("覆盖安装返回 0（全拷成功）", 0, code);
-        CheckEqual("顶层文件到位", "binary-A", File.ReadAllText(Path.Combine(to, "Jicun.dll")));
-        CheckEqual("子目录也建出来了", "binary-B", File.ReadAllText(Path.Combine(to, "sub", "inner.txt")));
-        Check("用完把 staging 清掉了", !Directory.Exists(from));
-
-        // 失败用例：目标里 sub 被一个**文件**占了名字 → 建不了同名目录，那个文件记进失败列表，
-        // 但同一批里别的文件照拷（这条就是「杀软占着某个文件」时用户会看到的行为）
-        var from2 = Path.Combine(dir, "new2");
-        var to2 = Path.Combine(dir, "installed2");
-        BuildTree(from2);
-        Directory.CreateDirectory(to2);
-        File.WriteAllText(Path.Combine(to2, "sub"), "占着名字");
-        var code2 = UpdateInstaller.Apply(int.MaxValue, from2, to2);
-        CheckEqual("有文件拷不动就返回 1", 1, code2);
-        CheckEqual("拷不动的那个不连累别的文件", "binary-A", File.ReadAllText(Path.Combine(to2, "Jicun.dll")));
-    }
-
-    /// <summary>造一棵「解压出来的新版」目录树：一个顶层文件 + 一个子目录里的文件。</summary>
-    private static void BuildTree(string root)
-    {
-        Directory.CreateDirectory(Path.Combine(root, "sub"));
-        File.WriteAllText(Path.Combine(root, "Jicun.dll"), "binary-A");
-        File.WriteAllText(Path.Combine(root, "sub", "inner.txt"), "binary-B");
+        // 安装器写的 InstallLocation 带尾部反斜杠，大小写也不保证 —— 归一再比
+        Check("尾部分隔符不影响判等", UpdateService.IsSameDir(@"C:\a\b\", @"C:\a\b"));
+        Check("大小写不影响判等", UpdateService.IsSameDir(@"C:\A\B", @"c:\a\b"));
+        Check("不同目录不判等", !UpdateService.IsSameDir(@"C:\a\b", @"C:\a\bc"));
+        Check("空串一律不判等", !UpdateService.IsSameDir("", "") && !UpdateService.IsSameDir("", @"C:\a"));
     }
 
     // ---- 网络失败的中文文案（界面上不该出现 .NET 的英文原文） ----
@@ -965,53 +934,108 @@ internal static class SelfCheck
         Check("只有空白的说明也解析出 0 个块", Markdown.Parse("  \n\n  ").Count == 0);
     }
 
-    // ---- 更新来源：清单 + Release 说明（用本地文件跑，不联网） ----
+    // ---- 更新来源：就一次 releases/latest 应答（用本地文件跑，不联网） ----
 
+    /// <summary>
+    /// 版本、说明、装哪个包、包的 sha256 —— 现在全在那一次应答里，所以这里把「同一份 JSON
+    /// 能翻出什么」逐条钉死：tag 当版本号、body 当说明、按架构挑安装器附件、digest 当校验值，
+    /// 以及没有安装器附件时（公告）要认得出「没得自动装」。
+    /// </summary>
     private static void UpdateSources()
     {
-        Console.WriteLine("更新来源（清单 / Release 说明）");
+        Console.WriteLine("更新来源（releases/latest 的应答）");
 
         var dir = Path.Combine(Path.GetTempPath(), "jicun-selftest-update-src-" + Environment.ProcessId);
         try
         {
             Directory.CreateDirectory(dir);
+            var path = Path.Combine(dir, "release.json");
 
-            var manifestPath = Path.Combine(dir, "win-x64.json");
-            File.WriteAllText(manifestPath, """
+            const string hex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+            var setupName = UpdateService.SetupAssetName("9.9.9");
+
+            // 一份正常应答：正文（椭圆那块）+ 安装器附件（带 digest）+ 绿色包
+            File.WriteAllText(path, $$"""
             {
-              "version": "9.9.9",
-              "url": "https://github.com/dhvbjvvb/jicun-desktop/releases/download/v9.9.9/Jicun-win-x64.zip",
-              "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-              "size": 123,
-              "publishedAt": "2026-01-01"
+              "tag_name": "v9.9.9",
+              "name": "即存 9.9.9",
+              "body": "# 标题\n**加粗**",
+              "prerelease": false,
+              "draft": false,
+              "assets": [
+                { "name": "{{setupName}}", "size": 123,
+                  "browser_download_url": "https://github.com/dhvbjvvb/jicun-desktop/releases/download/v9.9.9/{{setupName}}",
+                  "digest": "sha256:{{hex}}" },
+                { "name": "Jicun-win-x64.zip", "size": 456,
+                  "browser_download_url": "https://github.com/dhvbjvvb/jicun-desktop/releases/download/v9.9.9/Jicun-win-x64.zip",
+                  "digest": "sha256:{{hex}}" }
+              ]
             }
             """);
-            Environment.SetEnvironmentVariable("JICUN_UPDATE_MANIFEST", manifestPath);
-            var manifest = UpdateService.FetchLatestAsync().GetAwaiter().GetResult();
-            CheckEqual("清单能指到本地文件（不联网）", "9.9.9", manifest?.Version ?? "(null)");
-            Check("本地清单被判为可用", manifest?.IsUsable == true);
 
-            var releasePath = Path.Combine(dir, "release.json");
-            File.WriteAllText(releasePath, "{ \"tag_name\": \"v9.9.9\", \"body\": \"# 标题\\n**加粗**\" }");
-            Environment.SetEnvironmentVariable("JICUN_RELEASE_API", releasePath);
-            CheckEqual("说明从 Release 正文拿", "# 标题\n**加粗**",
-                UpdateService.FetchNotesAsync("9.9.9").GetAwaiter().GetResult() ?? "(null)");
+            Environment.SetEnvironmentVariable("JICUN_RELEASE_API", path);
+            var release = UpdateService.FetchLatestAsync().GetAwaiter().GetResult();
 
-            File.WriteAllText(releasePath, "{ \"body\": \"   \" }");
-            Check("正文是空的 → 返回 null（弹窗显示「没有写更新说明」占位）",
-                UpdateService.FetchNotesAsync("9.9.9").GetAwaiter().GetResult() is null);
+            CheckEqual("本地文件就当接口应答用（不联网）", "9.9.9", release?.VersionText ?? "(null)");
+            Check("tag 解得出 9.9.9", release?.Version == new Version(9, 9, 9));
+            CheckEqual("说明取自正文（就是椭圆那块）", "# 标题\n**加粗**", release?.Notes ?? "(null)");
+            CheckEqual("挑到当前架构的安装器附件", setupName, release?.Installer?.Name ?? "(null)");
+            CheckEqual("sha256 取自附件自带的 digest", hex, release?.Installer?.Sha256 ?? "(null)");
+            Check("发布页地址按 tag 拼",
+                release?.TagUrl.EndsWith("/releases/tag/v9.9.9", StringComparison.Ordinal) == true);
 
-            File.WriteAllText(releasePath, "{ \"message\": \"Not Found\" }");
-            Check("应答里没有 body → 也返回 null",
-                UpdateService.FetchNotesAsync("9.9.9").GetAwaiter().GetResult() is null);
+            // 正文是空白 → Notes 为 null，弹窗显示占位
+            File.WriteAllText(path, """{ "tag_name": "v9.9.9", "body": "   ", "assets": [] }""");
+            Check("正文空白 → Notes 是 null（弹窗显示占位）",
+                UpdateService.FetchLatestAsync().GetAwaiter().GetResult()?.Notes is null);
+
+            // 没有安装器附件 = 公告：版本照样认，但没得自动装
+            File.WriteAllText(path, """{ "tag_name": "v9.9.9", "body": "公告", "assets": [] }""");
+            var announcement = UpdateService.FetchLatestAsync().GetAwaiter().GetResult();
+            Check("公告（没带安装包）也认得出新版本", announcement?.Version == new Version(9, 9, 9));
+            Check("公告没有可自动装的安装器", announcement?.Installer is null);
+
+            // 有安装器但 digest 形状不对 → 不认（镜像站是第三方，没哈希就不装）
+            File.WriteAllText(path, $$"""
+            { "tag_name": "v9.9.9", "body": "x",
+              "assets": [ { "name": "{{setupName}}", "size": 1,
+                            "browser_download_url": "https://example.com/a.exe", "digest": "sha256:不是哈希" } ] }
+            """);
+            Check("digest 形状不对 → 不认这个安装器",
+                UpdateService.FetchLatestAsync().GetAwaiter().GetResult()?.Installer is null);
+
+            // 别的架构的安装器不算数（跑的是哪个架构，只认那个名字）
+            var otherArch = UpdateService.Rid == "win-x64" ? "win-arm64" : "win-x64";
+            File.WriteAllText(path, $$"""
+            { "tag_name": "v9.9.9", "body": "x",
+              "assets": [ { "name": "Jicun-Setup-9.9.9-{{otherArch}}.exe", "size": 1,
+                            "browser_download_url": "https://example.com/a.exe", "digest": "sha256:{{hex}}" } ] }
+            """);
+            Check("只认当前架构的安装器附件",
+                UpdateService.FetchLatestAsync().GetAwaiter().GetResult()?.Installer is null);
+
+            // 草稿 / 预发布都不当正式版
+            File.WriteAllText(path, """{ "tag_name": "v9.9.9", "draft": true, "body": "x", "assets": [] }""");
+            Check("草稿不认", UpdateService.FetchLatestAsync().GetAwaiter().GetResult() is null);
+
+            File.WriteAllText(path, """{ "tag_name": "v9.9.9", "prerelease": true, "body": "x", "assets": [] }""");
+            Check("预发布不当正式版", UpdateService.FetchLatestAsync().GetAwaiter().GetResult() is null);
+
+            // 仓库还没有 Release（api 回 404 的应答）、坏 JSON、文件不存在：都返回 null，不抛
+            File.WriteAllText(path, """{ "message": "Not Found" }""");
+            Check("仓库还没发过 Release（404 那种应答）→ 返回 null，不抛",
+                UpdateService.FetchLatestAsync().GetAwaiter().GetResult() is null);
+
+            File.WriteAllText(path, "不是 JSON");
+            Check("应答不是 JSON → 返回 null，不抛",
+                UpdateService.FetchLatestAsync().GetAwaiter().GetResult() is null);
 
             Environment.SetEnvironmentVariable("JICUN_RELEASE_API", Path.Combine(dir, "nope.json"));
             Check("指到不存在的文件 → 返回 null，不抛",
-                UpdateService.FetchNotesAsync("9.9.9").GetAwaiter().GetResult() is null);
+                UpdateService.FetchLatestAsync().GetAwaiter().GetResult() is null);
         }
         finally
         {
-            Environment.SetEnvironmentVariable("JICUN_UPDATE_MANIFEST", null);
             Environment.SetEnvironmentVariable("JICUN_RELEASE_API", null);
             try { Directory.Delete(dir, true); } catch { /* 临时目录 */ }
         }

@@ -1,96 +1,147 @@
+using Microsoft.Win32;
 using System.Diagnostics;
 using System.IO;
-using System.IO.Compression;
 using System.Net;
 using System.Net.Http;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Jicun.Desktop.Services;
 
 /// <summary>
-/// 一份「最新版」清单，放在仓库里的 <c>update/&lt;运行时&gt;.json</c>。
+/// GitHub 上最新的那个正式版（<c>releases/latest</c> 应答的原样映射）。
 /// </summary>
 /// <remarks>
-/// 为什么不直接问 GitHub Releases API：那个接口国内时通时不通，也没有 CDN 可以垫。
-/// 清单是个静态文件，能走 GitHub 镜像 + jsDelivr —— 这就是「检测走 CDN / 镜像」。
-/// 版本号、下载地址、sha256 全在清单里，客户端只认这一份。
-/// 更新说明**不在**清单里：只从 GitHub Release 正文取（见 FetchNotesAsync）。
+/// 版本、更新说明、装哪个包、这个包的 sha256 —— 全在一次请求里，没有第二份清单要维护：
+/// <list type="bullet">
+///   <item><see cref="TagName"/>（v1.0.1）就是版本号；</item>
+///   <item><see cref="Body"/> 就是你在 Release 页面椭圆那块写的说明，弹窗显示的就是它；</item>
+///   <item><see cref="Assets"/> 里挑安装器，它自带的 <c>digest</c> 就是 sha256。</item>
+/// </list>
+/// 之前那份「发版时另写一个 update/&lt;运行时&gt;.json 并提交推送」的清单去掉了：多一个手工步骤，
+/// 漏提交就等于客户端永远看不到新版。现在只认 Release 本身，发完版就完事。
+/// 国内可用性靠镜像垫（gh-proxy；ghfast 实测对 api 路径回 403，不能用）+ <c>JICUN_RELEASE_API</c>
+/// 覆盖（排障 / 自检指本地 JSON 文件）。
 /// </remarks>
-public sealed class UpdateManifest
+public sealed class UpdateRelease
 {
-    public string Version { get; set; } = "";
+    [JsonPropertyName("tag_name")] public string TagName { get; set; } = "";
+    [JsonPropertyName("name")] public string? Name { get; set; }
 
-    /// <summary>zip 的地址。GitHub 的 release 附件会被换成镜像地址再试。</summary>
-    public string Url { get; set; } = "";
+    /// <summary>Release 正文（椭圆那块）。</summary>
+    [JsonPropertyName("body")] public string? Body { get; set; }
 
-    /// <summary>zip 的 sha256（64 位十六进制）。**必须**有：镜像站是第三方，只能靠它对文件。</summary>
-    public string? Sha256 { get; set; }
+    [JsonPropertyName("prerelease")] public bool Prerelease { get; set; }
+    [JsonPropertyName("draft")] public bool Draft { get; set; }
+    [JsonPropertyName("assets")] public List<ReleaseAsset> Assets { get; set; } = new();
 
-    public long Size { get; set; }
-    public string? PublishedAt { get; set; }
+    /// <summary>版本号（tag 去掉 v 前缀）。解不出来就不算数。</summary>
+    [JsonIgnore] public Version? Version => UpdateService.ParseVersion(TagName);
 
-    /// <summary>版本解得出来、地址是 http(s)、哈希是 64 位十六进制，才认这份清单。</summary>
-    public bool IsUsable =>
-        UpdateService.ParseVersion(Version) is not null &&
-        Uri.TryCreate(Url, UriKind.Absolute, out var uri) &&
-        (uri.Scheme == Uri.UriSchemeHttps || uri.Scheme == Uri.UriSchemeHttp) &&
-        IsSha256(Sha256);
+    /// <summary>给用户看的版本号文本，也用它拼安装器的文件名。</summary>
+    [JsonIgnore] public string VersionText => Version?.ToString() ?? TagName.Trim();
 
-    internal static bool IsSha256(string? value)
+    /// <summary>更新说明；没写就是 null，弹窗自己会显示「没有写更新说明」占位。</summary>
+    [JsonIgnore] public string? Notes => string.IsNullOrWhiteSpace(Body) ? null : Body!.Trim();
+
+    /// <summary>草稿和预发布都不当正式版（真接口的 latest 本来就不会给这两种，只在本地文件演练时用得上）。</summary>
+    [JsonIgnore] public bool IsUsable => Version is not null && !Draft && !Prerelease;
+
+    /// <summary>这个版本自己的页面 —— 绿色版点「去下载」就开它（安装器 / 绿色包都在附件里）。</summary>
+    [JsonIgnore]
+    public string TagUrl => "https://github.com/" + UpdateService.Repo + "/releases/tag/" + TagName;
+
+    /// <summary>
+    /// 我们要装的那个安装器附件。**必须带 sha256**（digest）才认 —— 镜像站是第三方，
+    /// 没有哈希就没法确认下回来的是不是我们的包，那就宁可当公告，别装。
+    /// </summary>
+    [JsonIgnore]
+    public ReleaseAsset? Installer =>
+        Assets.FirstOrDefault(a =>
+            string.Equals(a.Name, UpdateService.SetupAssetName(VersionText), StringComparison.OrdinalIgnoreCase)
+            && a.Sha256 is not null);
+}
+
+/// <summary>Release 里的一个附件。</summary>
+public sealed class ReleaseAsset
+{
+    [JsonPropertyName("name")] public string Name { get; set; } = "";
+    [JsonPropertyName("browser_download_url")] public string? BrowserDownloadUrl { get; set; }
+    [JsonPropertyName("size")] public long Size { get; set; }
+
+    /// <summary>GitHub 给的 <c>sha256:&lt;64 位十六进制&gt;</c>。</summary>
+    [JsonPropertyName("digest")] public string? Digest { get; set; }
+
+    /// <summary>digest 里那段 sha256；形状不对就返回 null（当没有哈希处理，不拿它当校验值）。</summary>
+    [JsonIgnore]
+    public string? Sha256
     {
-        var s = value ?? "";
-        if (s.Length != 64) return false;
-        foreach (var c in s) if (!Uri.IsHexDigit(c)) return false;
-        return true;
+        get
+        {
+            var digest = (Digest ?? "").Trim();
+            const string prefix = "sha256:";
+            if (!digest.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return null;
+
+            var hex = digest[prefix.Length..].Trim();
+            return UpdateService.IsSha256(hex) ? hex.ToLowerInvariant() : null;
+        }
     }
 }
 
 /// <summary>
-/// 检查更新 + 下载新版本。
+/// 检查更新 + 下载安装器。
 /// </summary>
 /// <remarks>
-/// 三段式：<list type="number">
-///   <item>拉清单（镜像 → 直连 → CDN，第一个通的就用）；</item>
-///   <item>下载 zip（同样走镜像），下完算 sha256 对清单；</item>
-///   <item>解压到 %LOCALAPPDATA%\Jicun\update\staging-&lt;版本&gt;，交给新版的 --apply-update 进程去覆盖安装。</item>
+/// 流程：<list type="number">
+///   <item>拉 <c>releases/latest</c>（镜像 → 直连），版本 / 说明 / 附件 / 哈希一起拿到；</item>
+///   <item>版本比当前大才继续。**安装器装的版本**才有「更新」按钮：下载安装器 → 对 sha256 →
+///         静默跑它 → 装完它自己把新版拉起来。绿色版只弹说明 + 「去下载」（见 UpdateDialog）；
+///   </item>
 /// </list>
 /// 「忽略某个版本」存在 %LOCALAPPDATA%\Jicun\update-state.json —— 只有比它更高的版本才会再弹窗。
 /// </remarks>
 public static class UpdateService
 {
-    private const string Repo = "dhvbjvvb/jicun-desktop";
-    private const string Branch = "main";
+    internal const string Repo = "dhvbjvvb/jicun-desktop";
 
-    /// <summary>仓库里清单的路径。发版脚本 release.ps1 写的就是这儿。</summary>
-    private static string ManifestPath => "update/" + Rid + ".json";
+    /// <summary>发布页兜底：检查更新失败时（国内连不上 api.github.com、镜像也挂了）给用户一条出路。</summary>
+    internal const string ReleasesUrl = "https://github.com/" + Repo + "/releases/latest";
 
-    private static string Rid =>
+    /// <summary>当前跑的是哪个运行时 —— 决定挑哪个安装器附件。</summary>
+    internal static string Rid =>
         RuntimeInformation.ProcessArchitecture == Architecture.Arm64 ? "win-arm64" : "win-x64";
+
+    /// <summary>
+    /// 安装器附件的名字。**必须和 pack.ps1 的 SetupSuffix 规则一致**：
+    /// win-x64 是 <c>Jicun-Setup-1.0.1.exe</c>，arm64 是 <c>Jicun-Setup-1.0.1-win-arm64.exe</c>。
+    /// 对不上就会被当成「这个版本没带安装器」，于是只弹公告 —— 不报错，但用户装不上。
+    /// </summary>
+    internal static string SetupAssetName(string version) =>
+        "Jicun-Setup-" + version + (Rid == "win-x64" ? "" : "-" + Rid) + ".exe";
 
     private static readonly string StateDir =
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Jicun");
 
     private static readonly string StatePath = Path.Combine(StateDir, "update-state.json");
 
-    /// <summary>下载的 zip 和解压出来的新版都放这儿。装完系统自己会清，装不上就留着下次重来。</summary>
+    /// <summary>下载的安装器放这儿。装完（或者没装成）都由下次启动顺手清掉。</summary>
     public static string UpdateDir { get; } = Path.Combine(StateDir, "update");
 
-    // 三套超时这里各占一层：清单用**固定超时**（10 秒够，文件很小），下载把上限交给调用处的
-    // **整体预算** CTS（20 分钟，见 DownloadAsync）—— 大文件绝不能被一个固定超时掐死。
-    private static readonly HttpClient ManifestHttp = CreateManifestHttp();
+    // 两套超时各占一层：接口用**固定超时**（国内首次 DNS + TLS 慢，给 25 秒；就一个 JSON），下载把上限
+    // 交给调用处的**整体预算** CTS（20 分钟，见 DownloadAsync）—— 大文件绝不能被一个固定超时掐死。
+    private static readonly HttpClient ApiHttp = CreateApiHttp();
 
-    /// <summary>
-    /// 清单和 Release 说明都走这个客户端。必须带 User-Agent：GitHub 的 API 不给没有 UA 的请求回数据。
-    /// </summary>
-    private static HttpClient CreateManifestHttp()
+    /// <summary>接口走这个客户端。必须带 User-Agent：GitHub 的 API 不给没有 UA 的请求回数据。</summary>
+    private static HttpClient CreateApiHttp()
     {
-        var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+        var http = new HttpClient { Timeout = TimeSpan.FromSeconds(25) };
         http.DefaultRequestHeaders.UserAgent.ParseAdd("Jicun-Desktop");
         return http;
     }
+
     private static readonly HttpClient DownloadHttp = new() { Timeout = Timeout.InfiniteTimeSpan };
 
     private static readonly JsonSerializerOptions Json = new() { PropertyNameCaseInsensitive = true };
@@ -113,16 +164,24 @@ public static class UpdateService
         return s.Length > 0 && Version.TryParse(s, out var v) ? v : null;
     }
 
-    /// <summary>把清单里的版本号收敛成「能安全拼进路径」的形状。</summary>
+    /// <summary>64 位十六进制才算 sha256 —— 校验值的形状不对，就不该拿它去比。</summary>
+    internal static bool IsSha256(string? value)
+    {
+        var s = value ?? "";
+        if (s.Length != 64) return false;
+        foreach (var c in s) if (!Uri.IsHexDigit(c)) return false;
+        return true;
+    }
+
+    /// <summary>把远端给的版本号收敛成「能安全拼进路径」的形状。</summary>
     /// <remarks>
-    /// 远端字符串绝不能直接进路径：<c>1.0.1-..\..\..\Temp</c> 这种能过 <see cref="ParseVersion"/>
-    /// 的截断（在 - 处切）也能过 <see cref="UpdateManifest.IsUsable"/> 的形状校验，而 staging 路径
-    /// 后面跟着的是递归删除 + 解压 + 启动进程。凡是要拼进路径的版本号都先过这里。
+    /// tag 是远端字符串，绝不能直接进路径：<c>1.0.1-..\..\..\Temp</c> 这种能过 <see cref="ParseVersion"/>
+    /// 的截断（在 - 处切），然后被拼进下载文件名。凡是要拼进路径的版本号都先过这里。
     /// </remarks>
     internal static string PathSafeVersion(string version)
     {
         var clean = ParseVersion(version)?.ToString();
-        if (string.IsNullOrEmpty(clean)) throw new FormatException("清单里的版本号不对劲：" + version);
+        if (string.IsNullOrEmpty(clean)) throw new FormatException("版本号不对劲：" + version);
         return clean;
     }
 
@@ -136,7 +195,7 @@ public static class UpdateService
     private static string? _ignored;
     private static bool _loaded;
 
-    /// <summary>被用户点过「忽略」的版本。比它更高的版本照样弹。</summary>
+    /// <summary>被用户点过「忽略」的版本（记的是 tag，比如 v1.0.1）。比它更高的版本照样弹。</summary>
     public static string? IgnoredVersion
     {
         get
@@ -176,42 +235,70 @@ public static class UpdateService
 
     #endregion
 
-    /// <summary>能不能自己覆盖自己。装在 Program Files 里或者只读盘上就只能手动更新。</summary>
-    public static bool CanSelfUpdate()
+    /// <summary>
+    /// 这份程序是不是**安装器装的**。
+    ///
+    /// 只有安装器装的版本能自动更新：绿色版（解压即用）去跑安装器会被装到
+    /// %LOCALAPPDATA%\Programs\Jicun —— 等于凭空多出一份，原来那份还留在原地。
+    ///
+    /// 判据是安装器写的卸载项：HKCU 的 Uninstall 里有一条 InstallLocation 就是当前目录
+    /// （安装器是 PrivilegesRequired=lowest，只写 HKCU；它的 InstallLocation 带尾部反斜杠，
+    /// 所以两边都归一化再比）。读不动注册表就按绿色版算 —— 宁可让人手动下载，
+    /// 也不要往别人的安装目录里装。
+    /// </summary>
+    public static bool IsInstalledCopy()
     {
+        var here = AppContext.BaseDirectory;
+
         try
         {
-            var probe = Path.Combine(AppContext.BaseDirectory, ".jicun-update-probe");
-            File.WriteAllText(probe, "x");
-            File.Delete(probe);
-            return true;
+            using var uninstall = Registry.CurrentUser.OpenSubKey(
+                @"Software\Microsoft\Windows\CurrentVersion\Uninstall");
+            if (uninstall is null) return false;
+
+            foreach (var name in uninstall.GetSubKeyNames())
+            {
+                using var entry = uninstall.OpenSubKey(name);
+                if (entry?.GetValue("InstallLocation") is not string location) continue;
+                if (IsSameDir(location, here)) return true;
+            }
         }
         catch
         {
-            return false;
+            // 读不动注册表就按绿色版处理
         }
+
+        return false;
+    }
+
+    /// <summary>目录比较用：去掉首尾空白和尾部分隔符，统一大小写（Windows 路径不区分大小写）。</summary>
+    internal static string NormalizeDir(string path) =>
+        path.Trim().TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).ToLowerInvariant();
+
+    /// <summary>两个路径是不是同一个目录。空串一律判否 —— 别让空的 InstallLocation 撞上空的基准目录。</summary>
+    internal static bool IsSameDir(string left, string right)
+    {
+        var a = NormalizeDir(left);
+        return a.Length > 0 && a == NormalizeDir(right);
     }
 
     /// <summary>
-    /// 拉最新版清单。候选按「镜像 → 直连 → CDN」排，第一个通的就是答案。
+    /// 拉最新正式版。候选按「镜像 → 直连」排，第一个通的就是答案；都拿不到返回 null。
     /// </summary>
-    /// <remarks>
-    /// jsDelivr 垫最后：它是真 CDN，但缓存最长 12 小时，刚发的版可能还是旧的；
-    /// 而且本机实测 8 秒才回，只适合当前面全挂掉的时候兜底。
-    /// </remarks>
-    public static async Task<UpdateManifest?> FetchLatestAsync(CancellationToken ct = default)
+    public static async Task<UpdateRelease?> FetchLatestAsync(CancellationToken ct = default)
     {
-        foreach (var url in ManifestUrls())
+        foreach (var url in ReleaseApiUrls())
         {
             try
             {
                 var body = await ReadMaybeLocalAsync(url, ct).ConfigureAwait(false);
                 if (body is null) continue;
-                var manifest = JsonSerializer.Deserialize<UpdateManifest>(body.TrimStart('\uFEFF'), Json);
-                if (manifest is null || !manifest.IsUsable) continue;
+
+                var release = JsonSerializer.Deserialize<UpdateRelease>(body.TrimStart('\uFEFF'), Json);
+                if (release is null || !release.IsUsable) continue;
 
                 LastError = null;
-                return manifest;
+                return release;
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -222,51 +309,15 @@ public static class UpdateService
                 LastError = ex.Message;
             }
         }
+
         return null;
     }
 
     /// <summary>
-    /// 拉某个版本的**发布说明**（GitHub Release 正文的 Markdown 原文）。拉不到返回 null，
-    /// 调用方会退回清单里那份 notes。
+    /// 最新版在哪儿取。<c>JICUN_RELEASE_API</c> 指到本地 JSON 文件即可离线演练弹窗（自检也用它）。
+    /// 镜像先试：直连 api.github.com 国内时通时不通。**ghfast 不能用**，实测它对 api 路径回 403。
     /// </summary>
-    /// <remarks>
-    /// 为什么版本检测不走这个接口、说明却走：检测要的是「稳」（静态清单能走镜像和 CDN），
-    /// 而说明是给人看的文字 —— 从 Release 正文拿的好处是**你在 GitHub 网页上改了说明，
-    /// 用户下次检查更新就能看到**，不用重新发一版。
-    /// 镜像（gh-proxy）也会经手这段文字，但它只是文本、不执行任何东西；里面的链接只放行 http(s)。
-    /// </remarks>
-    public static async Task<string?> FetchNotesAsync(string version, CancellationToken ct = default)
-    {
-        foreach (var url in ReleaseApiUrls(version))
-        {
-            try
-            {
-                var body = await ReadMaybeLocalAsync(url, ct).ConfigureAwait(false);
-                if (body is null) continue;
-
-                using var doc = JsonDocument.Parse(body.TrimStart('\uFEFF'));
-                if (!doc.RootElement.TryGetProperty("body", out var value) || value.ValueKind != JsonValueKind.String) continue;
-
-                var notes = value.GetString();
-                if (!string.IsNullOrWhiteSpace(notes)) return notes.Trim();
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                return null;
-            }
-            catch
-            {
-                // 换下一个地址；都拿不到就退回清单里那份说明
-            }
-        }
-        return null;
-    }
-
-    /// <summary>
-    /// 某版本的 Release 说明在哪儿取。<c>JICUN_RELEASE_API</c> 是排障 / 自检用的（可以指本地文件）。
-    /// **不能让 ghfast 上**：实测它对 api 路径回 403，它只代理 raw 和 releases 附件。
-    /// </summary>
-    private static IEnumerable<string> ReleaseApiUrls(string version)
+    private static IEnumerable<string> ReleaseApiUrls()
     {
         var custom = Environment.GetEnvironmentVariable("JICUN_RELEASE_API");
         if (!string.IsNullOrWhiteSpace(custom))
@@ -276,41 +327,23 @@ public static class UpdateService
             yield break;
         }
 
-        var tag = version.StartsWith('v') || version.StartsWith('V') ? version : "v" + version;
-        var api = "https://api.github.com/repos/" + Repo + "/releases/tags/" + tag;
-        yield return "https://gh-proxy.com/" + api;   // 国内直连 api.github.com 常被挡，镜像先试
+        var api = "https://api.github.com/repos/" + Repo + "/releases/latest";
+        yield return "https://gh-proxy.com/" + api;
         yield return api;
     }
 
     /// <summary>
     /// 读一个地址。**如果这个地址其实是本机已存在的文件路径，就直接读文件** ——
     /// 这样排障和自检能在「还没发布任何版本」的情况下，把「弹窗里到底显示什么」完整跑一遍
-    /// （JICUN_UPDATE_MANIFEST / JICUN_RELEASE_API 指到本地 JSON 即可）。
+    /// （<c>JICUN_RELEASE_API</c> 指到本地 JSON 即可）。
     /// </summary>
     private static async Task<string?> ReadMaybeLocalAsync(string url, CancellationToken ct)
     {
         if (File.Exists(url)) return await File.ReadAllTextAsync(url, ct).ConfigureAwait(false);
 
-        using var resp = await ManifestHttp.GetAsync(url, ct).ConfigureAwait(false);
+        using var resp = await ApiHttp.GetAsync(url, ct).ConfigureAwait(false);
         if (resp.StatusCode != HttpStatusCode.OK) return null;
         return await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-    }
-
-    private static IEnumerable<string> ManifestUrls()
-    {
-        // 本机调试 / 自建镜像用：直接指定清单地址，跳过所有候选
-        var custom = Environment.GetEnvironmentVariable("JICUN_UPDATE_MANIFEST");
-        if (!string.IsNullOrWhiteSpace(custom))
-        {
-            yield return custom.Trim();
-            yield break;
-        }
-
-        var raw = "https://raw.githubusercontent.com/" + Repo + "/" + Branch + "/" + ManifestPath;
-        yield return "https://ghfast.top/" + raw;
-        yield return "https://gh-proxy.com/" + raw;
-        yield return raw;
-        yield return "https://cdn.jsdelivr.net/gh/" + Repo + "@" + Branch + "/" + ManifestPath;
     }
 
     private static IEnumerable<string> DownloadUrls(string url)
@@ -329,18 +362,23 @@ public static class UpdateService
     }
 
     /// <summary>
-    /// 下载 zip。镜像站在国内快得多，但它们毕竟是第三方，可能给回来一个坏文件 ——
-    /// 所以下完必须过 <see cref="VerifyAsync"/>，那一步才是安全边界。
+    /// 下载安装器。镜像站在国内快得多，但它们毕竟是第三方，可能给回来一个坏文件 ——
+    /// 所以**每下到一个候选就当场对 sha256**，对不上就删掉换下一个地址重来，全都不行才报错。
+    /// 校验放这一层（不再只交给调用方）的原因：换源重试只有在这里做得了。
     /// </summary>
-    public static async Task<string> DownloadAsync(UpdateManifest manifest, IProgress<double>? progress, CancellationToken ct = default)
+    public static async Task<string> DownloadAsync(UpdateRelease release, ReleaseAsset asset,
+        IProgress<double>? progress, CancellationToken ct = default)
     {
         Directory.CreateDirectory(UpdateDir);
-        var zip = Path.Combine(UpdateDir, "Jicun-" + PathSafeVersion(manifest.Version) + ".zip");
+        var setup = Path.Combine(UpdateDir, "Jicun-Setup-" + PathSafeVersion(release.VersionText) + ".exe");
+        var expected = asset.Sha256;
+        if (!IsSha256(expected)) throw new IOException("这个版本没带可校验的 sha256，不装");
+
         Exception? last = null;
 
-        foreach (var url in DownloadUrls(manifest.Url))
+        foreach (var url in DownloadUrls(asset.BrowserDownloadUrl ?? ""))
         {
-            var part = zip + ".part";
+            var part = setup + ".part";
             try
             {
                 using var overall = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -354,7 +392,7 @@ public static class UpdateService
                     continue;
                 }
 
-                var total = resp.Content.Headers.ContentLength ?? manifest.Size;
+                var total = resp.Content.Headers.ContentLength ?? asset.Size;
                 var done = 0L;
 
                 await using (var src = await resp.Content.ReadAsStreamAsync(overall.Token).ConfigureAwait(false))
@@ -370,10 +408,19 @@ public static class UpdateService
                     }
                 }
 
-                File.Move(part, zip, true);
+                // 下完当场对指纹：对不上说明这个源给回来一个坏文件，删掉换下一个地址重来
+                if (!await VerifyAsync(part, expected).ConfigureAwait(false))
+                {
+                    last = new IOException("下到的文件 sha256 对不上");
+                    progress?.Report(0d);
+                    TryDeleteFile(part);
+                    continue;
+                }
+
+                File.Move(part, setup, true);
                 progress?.Report(1d);
                 LastError = null;
-                return zip;
+                return setup;
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -394,7 +441,7 @@ public static class UpdateService
     /// <summary>对 sha256。除了文件完整性，这也是防「镜像站给你塞了个别的 exe」的唯一一道。</summary>
     public static async Task<bool> VerifyAsync(string file, string? expected)
     {
-        if (!UpdateManifest.IsSha256(expected)) return false;
+        if (!IsSha256(expected)) return false;
         try
         {
             await using var fs = File.OpenRead(file);
@@ -407,40 +454,41 @@ public static class UpdateService
         }
     }
 
-    /// <summary>解压到独立目录。**不**直接往安装目录里解 —— 那时候主程序还在跑，文件都占着。</summary>
-    public static string Extract(string zip, string version)
-    {
-        var staging = Path.Combine(UpdateDir, "staging-" + PathSafeVersion(version));
-        TryDeleteDir(staging);
-        Directory.CreateDirectory(staging);
-        ZipFile.ExtractToDirectory(zip, staging, true);
-        return staging;
-    }
+    /// <summary>
+    /// 静默跑安装器的参数。
+    ///
+    /// <c>/SILENT</c> 有进度窗但不用点（<c>/VERYSILENT</c> 连窗口都没有，出问题看不见）；
+    /// <c>/SUPPRESSMSGBOXES</c> 别弹框把后台更新卡住；<c>/NORESTART</c> 不重启系统；
+    /// <c>/CLOSEAPPLICATIONS</c> 让它自己去处理还占着文件的进程 —— 我们随后就退出了，
+    /// 但「退出」和它开始复制之间还有窗口期。
+    ///
+    /// 不传 <c>/DIR</c>：安装器认得自己上次装到哪儿（UsePreviousAppDir），而调到这里之前
+    /// 已经用 <see cref="IsInstalledCopy"/> 确认过当前目录就是它装的那个。
+    /// </summary>
+    internal static readonly string[] SetupArguments =
+        { "/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS" };
 
     /// <summary>
-    /// 用**新版自己**的 exe 起一个隐藏进程，它等我们退干净之后再覆盖安装。
-    /// 用自己人当安装器省一个额外二进制：Program.cs 那条命令行分支就是干这个的。
+    /// 起安装器。装完由安装器自己的 <c>[Run]</c> 条目把新版拉起来（那条去掉了 skipifsilent，
+    /// 所以静默安装也照样跑），我们这边只负责起进程然后退出。
+    /// 返回 false = 进程没起来，调用方得把原因说给用户。
     /// </summary>
-    public static bool StartInstaller(string staging)
+    public static bool RunSetup(string setupPath)
     {
-        var exe = Path.Combine(staging, "Jicun.exe");
-        if (!File.Exists(exe)) return false;
-
-        var target = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        var psi = new ProcessStartInfo
+        try
         {
-            FileName = exe,
-            WorkingDirectory = staging,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-        foreach (var arg in new[] { "--apply-update", "--pid", Environment.ProcessId.ToString(), "--from", staging, "--to", target })
-            psi.ArgumentList.Add(arg);
-
-        return Process.Start(psi) is not null;
+            var psi = new ProcessStartInfo { FileName = setupPath, UseShellExecute = false };
+            foreach (var arg in SetupArguments) psi.ArgumentList.Add(arg);
+            return Process.Start(psi) is not null;
+        }
+        catch (Exception ex)
+        {
+            LastError = ex.Message;
+            return false;
+        }
     }
 
-    /// <summary>清掉上次留下的 zip / 解压目录。启动时顺手做一次，省得堆在 %LOCALAPPDATA% 里。</summary>
+    /// <summary>清掉上次留下的安装器和半截下载。启动时顺手做一次，省得堆在 %LOCALAPPDATA% 里。</summary>
     public static void CleanupOldArtifacts() => TryDeleteDir(UpdateDir);
 
     private static string ReadText(string path) => File.ReadAllText(path);
