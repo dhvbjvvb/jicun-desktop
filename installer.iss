@@ -8,7 +8,9 @@
 ;   * 协议显示仓库里的 LICENSE（MIT），并把「我接受」**默认选中** —— 用户不用多点一下，
 ;     想拒绝仍然可以点另一项（见文件末尾 [Code]）。
 ;   * 桌面快捷方式默认勾上（!see [Tasks] 的 checkedonce），用户可以取消。
-;   * 卸载不动用户数据：设置 / 历史 / 下载记录都在 %LOCALAPPDATA%\Jicun，不归安装器管。
+;   * 卸载会连本地数据一起删掉（%LOCALAPPDATA%\Jicun：设置 / 历史 / 下载记录 / 缓存），
+;     但不动用户自己下载的视频 / 图片 / 音频；卸载前若程序在跑，先弹窗让用户一键关掉它
+;     （[Code] 的 InitializeUninstall），不然文件被占用会删不干净。
 ;
 ; 用法（一般不用手敲，pack.ps1 -Installer 会调）：
 ;   ISCC.exe installer.iss /DAppVersion=1.0.1 /DStageDir=dist\win-x64
@@ -55,6 +57,11 @@ DisableWelcomePage=no
 AllowNoIcons=yes
 LicenseFile=LICENSE
 PrivilegesRequired=lowest
+; 静默更新时要覆盖正在运行的自己：让安装器走 Restart Manager 去关掉占着文件的进程
+; （客户端那边也传了 /CLOSEAPPLICATIONS）。
+CloseApplications=yes
+; 但别让它自己重启应用 —— 重开交给上面 [Run] 那条，两边都做会开出两个窗口。
+RestartApplications=no
 ArchitecturesAllowed={#Arch}
 ArchitecturesInstallIn64BitMode={#Arch}
 OutputDir=dist
@@ -79,7 +86,14 @@ Name: "{group}\卸载 {#AppName}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\{#AppExe}"; Description: "立即启动 {#AppName}"; Flags: nowait postinstall skipifsilent
+; 不带 skipifsilent：静默更新时也要把新版拉起来（skipifsilent 会在 /SILENT 下跳过它，
+; 用户就得自己去开始菜单点一下）。正常手动安装时这就是「完成后启动」那个勾。
+Filename: "{app}\{#AppExe}"; Description: "立即启动 {#AppName}"; Flags: nowait postinstall
+
+[UninstallDelete]
+; 卸载不留数据（用户明确要求）：设置 / 历史 / 下载记录 / 缓存整目录清掉。
+; 只删我们自己那份数据（%LOCALAPPDATA%\Jicun）—— 用户下载到视频/图片/音乐目录里的文件一律不动。
+Type: filesandordirs; Name: "{localappdata}\Jicun"
 
 [Messages]
 ; 官方发行包里没有简体中文语言文件（ChineseSimplified.isl 不随 Inno 发布），
@@ -103,7 +117,9 @@ ButtonWizardBrowse=浏览…
 ClickNext=点「下一步」继续，点「取消」退出安装。
 WelcomeLabel1=欢迎安装 即存
 ; 注意别自己再写一遍应用名：[name/ver] 会展开成「即存 1.0.0」
-WelcomeLabel2=这个向导会把 [name/ver] 装到你的电脑上。%n%n装好后桌面会有快捷方式（下一页可以取消）；设置、历史和下载记录都放在你自己的用户目录里，卸载时不会被删。%n%n继续之前，建议先关掉正在运行的 即存。
+; 最后那段是给接收方看的：安装包没签名，别人从网上拿到会先吃一次 SmartScreen 警告，
+; 这里就地解释一句，省得人家以为是病毒（不指望所有人先问我们）
+WelcomeLabel2=这个向导会把 [name/ver] 装到你的电脑上。%n%n装好后桌面会有快捷方式（下一页可以取消）；设置、历史和下载记录都放在你自己的用户目录里，卸载时会一并删掉（你自己下载的视频、图片、音频不受影响）。%n%n如果刚才 Windows 弹了蓝色的「Windows 已保护你的电脑」，点「更多信息」→「仍要运行」就行：这个安装包没有代码签名证书，不是病毒。%n%n继续之前，建议先关掉正在运行的 即存。
 WizardLicense=许可协议
 LicenseLabel=请先读一下下面这些重要信息。
 LicenseLabel3=继续安装就表示你接受这份协议；不接受就点「取消」。
@@ -131,7 +147,92 @@ InstallingLabel=正在安装，请稍等。
 FinishedLabel=即存 装好了。可以从桌面快捷方式或开始菜单启动。
 FinishedLabelNoIcons=即存 装好了。
 
+; 卸载器自己也有一套文案，键名跟安装那套不同 —— 不覆盖的话卸载界面是英文的
+; （实测：卸载确认页显示 "Are you sure you want to completely remove 即存 and all of its components?"）
+UninstallAppTitle=卸载
+UninstallAppFullTitle=卸载 %1
+UninstallAppRunningError=%1 正在运行。%n%n请先把它全部关掉，再点「确定」继续；点「取消」退出。
+ConfirmUninstall=确定要完全删除 %1 及其所有组件吗？
+UninstallStatusLabel=正在从你的电脑上删除 %1，请稍等。
+UninstalledAll=%1 已从你的电脑上完全删除。
+UninstalledMost=%1 卸载完成。%n%n有少数文件没能删掉，可以手动清理。
+UninstalledAndNeedsRestart=要完成 %1 的卸载，需要重启电脑。%n%n现在重启吗？
+
 [Code]
+const
+  AppExeName = '{#AppExe}';
+
+{ ---------- 卸载：先把正在运行的程序关掉，再把数据一起删掉 ---------- }
+
+function IsAppRunning(): Boolean;
+var
+  Code: Integer;
+begin
+  Result := Exec(ExpandConstant('{cmd}'),
+    '/c tasklist /FI "IMAGENAME eq ' + AppExeName + '" /NH | find /I "' + AppExeName + '" > nul',
+    '', SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0);
+end;
+
+procedure WaitASecond();
+var
+  Code: Integer;
+begin
+  { Inno 的 Pascal Script 里没有 Sleep，用 ping 顶一下 }
+  Exec(ExpandConstant('{cmd}'), '/c ping -n 2 127.0.0.1 > nul', '', SW_HIDE, ewWaitUntilTerminated, Code);
+end;
+
+procedure CloseJicun();
+var
+  Code: Integer;
+  Tries: Integer;
+begin
+  { taskkill 不带 /F 就是发 WM_CLOSE：先请它自己退，能走完它自己的退出流程 }
+  Exec(ExpandConstant('{cmd}'), '/c taskkill /IM ' + AppExeName + ' > nul 2>&1',
+       '', SW_HIDE, ewWaitUntilTerminated, Code);
+  Tries := 5;
+  while (Tries > 0) and IsAppRunning() do
+  begin
+    WaitASecond();
+    Tries := Tries - 1;
+  end;
+  { 还不退就强杀 —— 数据反正是要删的，留着进程只会让文件删不掉 }
+  if IsAppRunning() then
+    Exec(ExpandConstant('{cmd}'), '/c taskkill /IM ' + AppExeName + ' /T /F > nul 2>&1',
+         '', SW_HIDE, ewWaitUntilTerminated, Code);
+end;
+
+function InitializeUninstall(): Boolean;
+var
+  Choice: Integer;
+begin
+  Result := True;
+
+  if IsAppRunning() then
+  begin
+    { 静默卸载（/SILENT，客户端自己更新时用不着）没人点按钮，直接关掉它 }
+    if UninstallSilent() then
+      CloseJicun()
+    else
+    begin
+      { 数组字面量不能另起一行：.iss 的解析器会把行首的 [ 当成节标签 }
+      Choice := TaskDialogMsgBox('即存 正在运行',
+        '卸载前得先把它关掉，不然程序文件被它占着，会删不干净。',
+        mbConfirmation, MB_YESNO, ['现在关掉它并继续卸载', '先不卸载'], 1);
+      if Choice = IDYES then
+        CloseJicun()
+      else
+        Result := False;   { 用户想自己回去关，那这次先不卸 }
+    end;
+  end;
+
+  { 数据一起删：先说清楚删什么、不碰什么，别让人事后才知道 }
+  if Result and (not UninstallSilent()) then
+    Result := TaskDialogMsgBox('卸载会删掉本地数据',
+      '设置、观看历史、下载记录和缓存都会一起删掉，删了恢复不了。' + #13#10 +
+      '你自己下载的视频 / 图片 / 音频不受影响。',
+      mbConfirmation, MB_YESNO, ['继续卸载', '先不卸载'], 1) = IDYES;
+end;
+
 procedure InitializeWizard();
 begin
   { 协议页默认就选「我接受」：省掉用户一次点击；想拒绝还是能点另一项 }

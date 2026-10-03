@@ -6,6 +6,8 @@
   负载，见下面 -SkipTrim）。加 -FrameworkDependent 出小包（几 MB），
   但目标机器得先装 .NET 10 桌面运行时和 Windows App SDK 运行时。
 
+  仓库根的 使用说明.txt 会一起塞进包：绿色包解压能看到，安装版装完目录里也有一份。
+
   用法：
     .\pack.ps1                      # win-x64 自包含 + zip
     .\pack.ps1 -SkipZip             # 只出目录，不压
@@ -79,6 +81,17 @@ if (-not $SkipTrim) {
 
     Write-Host ("  裁掉 " + $killed.Count + " 个用不上的文件（" + $killedMB + " MB）+ " +
                 $langs.Count + " 个多余语言目录（" + $langsMB + " MB）") -ForegroundColor DarkGray
+}
+
+# 使用说明.txt 跟着包走：绿色包解压就能见着，安装版装完目录里也有一份。
+# 源文件在仓库根（dist/ 是构建产物目录、不入库），这里只负责复制进去。
+$guide = Join-Path $root "使用说明.txt"
+if (Test-Path $guide) {
+    Copy-Item $guide (Join-Path $stage "使用说明.txt") -Force
+    Write-Host "  带上 使用说明.txt" -ForegroundColor DarkGray
+}
+else {
+    Write-Warning "没有 $guide：包里就不带使用说明（不影响功能）"
 }
 
 # WinUI 的 .pri 不在发布清单里，漏了会做出一个双击就静默崩的包（退出码 0xC000027B）。

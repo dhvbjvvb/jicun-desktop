@@ -1,12 +1,16 @@
 <#
-  发一个版：改版本号 → 打包 → 算 sha256 → 写 update/<运行时>.json →（可选）发 GitHub Release。
+  发一个版：改版本号 → 打包（安装器 + 绿色包）→ 发 GitHub Release（安装器 + zip + 说明一起传）。
 
-  客户端就是靠仓库里的 update/<运行时>.json 发现新版的，所以发完之后记得提交推送。
+  更新的载荷是**安装器 exe**（客户端下它、静默跑它）；zip 是顺手传上去给人手动下的。
+  发版机器得装 Inno Setup —— 安装器是 pack.ps1 -Installer 现编出来的。
+
+  客户端只认 GitHub 上最新那个 Release：版本号 = tag、说明 = 正文、sha256 = 附件的 digest，
+  所以**必须 -Publish**（或自己到网页建 Release），也不用再提交什么清单文件。
 
 
-  **更新说明只有一个来源：这个版本的 GitHub Release 正文**（清单里不放说明）。所以：
+  **更新说明只有这一个来源：这个版本的 GitHub Release 正文**。所以：
     - -NotesFile 支持 Markdown，弹窗会渲染（# 标题、**加粗**、==高亮==、- 列表、居中…见 README「更新」一节）
-    - 光写清单不算完：必须 -Publish（或在网页上建 Release），否则客户端拿不到说明，只能显示「没有写更新说明」
+    - 必须 -Publish（或在网页上建 Release），否则客户端连「有新版本」都不知道
     - 发完之后改 Release 正文，用户下次检查就能看到，不用重发一版
   用法：
     .\release.ps1 -Version 1.0.1 -Notes "修了解析时闪退；设置页加了检查更新"
@@ -38,6 +42,10 @@ if (-not (Test-Path $proj)) { throw "找不到工程文件：$proj" }
 $clean = $Version.Trim().TrimStart("v", "V")
 if ($clean -notmatch '^\d+\.\d+\.\d+$') { throw "版本号得写成 1.2.3 这样：$Version" }
 
+# 安装器就是更新的载荷；zip 是顺手传的绿色包。文件名规则要和 pack.ps1 的 SetupSuffix 保持一致
+$setupSuffix = if ($Runtime -eq "win-x64") { "" } else { "-$Runtime" }
+$setup = Join-Path $root "dist\Jicun-Setup-$clean$setupSuffix.exe"
+
 if ($NotesFile) {
     if (-not (Test-Path $NotesFile)) { throw "找不到更新说明文件：$NotesFile" }
     $Notes = Get-Content $NotesFile -Raw
@@ -51,44 +59,27 @@ $text = $text -replace '<Version>[^<]*</Version>', "<Version>$clean</Version>"
 [System.IO.File]::WriteAllText($proj, $text, $utf8)
 Write-Host "版本号已改成 $clean" -ForegroundColor Cyan
 
-# 2. 打包（Release / 自包含 / 出 zip，打完启动一次确认不是坏包）
+# 2. 打包：安装器（更新的载荷）+ 绿色包 zip。打完启动一次确认不是坏包。
+#    安装器是 Inno Setup 现场编的，机器上没装的话 pack.ps1 会在这里直接报出来
 if (-not $SkipPack) {
-    & (Join-Path $root "pack.ps1") -Configuration Release -Runtime $Runtime -Verify
+    & (Join-Path $root "pack.ps1") -Configuration Release -Runtime $Runtime -Verify -Installer
     if ($LASTEXITCODE -ne 0) { throw "pack.ps1 失败（exit $LASTEXITCODE）" }
 }
-if (-not (Test-Path $zip)) { throw "没看到 $zip，先跑一次打包" }
+if (-not (Test-Path $setup)) { throw "没看到安装器 $setup，先跑一次打包（要装 Inno Setup）" }
+if (-not (Test-Path $zip)) { throw "没看到绿色包 $zip，先跑一次打包" }
 
-# 3. 算 sha256 —— 镜像站是第三方，这是唯一的安全边界，客户端校验不过就不装
-$hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
-$size = (Get-Item $zip).Length
-Write-Host "sha256 $hash" -ForegroundColor Cyan
-
-# 4. 写清单。下载地址写 GitHub Release 的附件；客户端会自动套镜像，并且必须对得上 sha256
-$manifest = [ordered]@{
-    version     = $clean
-    url         = "https://github.com/$repo/releases/download/v$clean/Jicun-$Runtime.zip"
-    sha256      = $hash
-    size        = $size
-    publishedAt = (Get-Date -Format "yyyy-MM-dd")
-}
-$manifestDir = Join-Path $root "update"
-New-Item -ItemType Directory -Force -Path $manifestDir | Out-Null
-$manifestPath = Join-Path $manifestDir "$Runtime.json"
-[System.IO.File]::WriteAllText($manifestPath, ($manifest | ConvertTo-Json -Depth 4), $utf8)
-Write-Host "清单已写：$manifestPath" -ForegroundColor Green
-
-# 5. 发 GitHub Release：**更新说明只有这一个来源**（清单里不放说明），下载附件也走它
+# 3. 发 GitHub Release：**版本、说明、安装包全在它身上**（客户端只认它），两个附件一起传
 if ($Publish) {
     if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
-        throw "没装 gh（GitHub CLI），用不了 -Publish；也可以自己到网页把 $zip 传上去"
+        throw "没装 gh（GitHub CLI），用不了 -Publish；也可以自己到网页把 $setup 和 $zip 传上去"
     }
-    gh release create "v$clean" $zip --repo $repo --title "即存 for Windows $clean" --notes $Notes
+    gh release create "v$clean" $setup $zip --repo $repo --title "即存 for Windows $clean" --notes $Notes
     if ($LASTEXITCODE -ne 0) { throw "gh release create 失败（exit $LASTEXITCODE）" }
     Write-Host "Release 已发布：https://github.com/$repo/releases/tag/v$clean" -ForegroundColor Green
 }
 else {
-    Write-Warning "没有 -Publish：GitHub 上就没有 v$clean 这个 Release，客户端拿不到更新说明（弹窗会显示「没有写更新说明」）。下载附件也得靠它。"
+    Write-Warning "没有 -Publish：GitHub 上就没有 v$clean 这个 Release，客户端什么都看不到（检测、说明、安装包全靠它）。"
 }
 
 Write-Host ""
-Write-Host "别忘了把 update\$Runtime.json 和改过的 csproj 提交推送 —— 客户端就是靠它发现新版的。" -ForegroundColor Yellow
+Write-Host "别忘了把 csproj 的版本号提交推送（仓库里的版本号得跟着走）。" -ForegroundColor Yellow
