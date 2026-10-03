@@ -22,7 +22,7 @@
     <!-- 资源管理器 / 任务栏 / 开始菜单看到的 exe 图标 -->
     <ApplicationIcon>Assets\jicun.ico</ApplicationIcon>
     <!-- 客户端拿它跟 GitHub 上的 update/<运行时>.json 比；release.ps1 发版时会改这一行 -->
-    <Version>1.0.5</Version>
+    <Version>1.0.6</Version>
   </PropertyGroup>
 
   <!--
