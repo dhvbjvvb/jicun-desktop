@@ -1,265 +1,211 @@
-# 即存 for Windows
+<p align="center">
+  <img src="Assets/jicun-256.png" alt="即存" width="112">
+</p>
 
-Android 版「即存」的桌面端：粘贴分享链接 → 调解析接口 → 图片 / 视频 / 音频 / 文案 →
-预览 → 下载到自选文件夹。
+<h1 align="center">即存 for Windows</h1>
 
-C# + WinUI 3（Windows App SDK 2.5.1），单工程、无第三方依赖。
+<p align="center">
+  <strong>粘贴分享链接，图片 / 视频 / 音频 / 文案一次拿到手。</strong>
+</p>
 
-## 跑起来
+<h3 align="center"><a href="https://github.com/dhvbjvvb/jicun-desktop/releases/latest">一键下载，装完即用。</a></h3>
 
-```powershell
-cd jicun-desktop
-dotnet run
-```
+<p align="center">
+  Android 版「即存」的 Windows 桌面端：C# + WinUI 3，单工程、自包含打包 —— 目标机器不用装 .NET、不用装 Windows App SDK、不用装 VC++ 运行库，也不要管理员权限。
+</p>
 
-工程是 unpackaged + self-contained（WindowsPackageType=None、WindowsAppSDKSelfContained=True），
-不需要装 Windows App SDK 运行时，直接出 exe 就能跑：
+<p align="center"><sub>本程序只做「把你自己的链接解析成直链再下载」：不提供任何内容、不绕过付费或权限。请遵守各内容平台的服务条款与当地法律，使用风险自负。<br>本仓库与任何内容平台均无隶属、合作、授权或背书关系。</sub></p>
 
-```powershell
-dotnet build -c Release
-.\bin\Release\net10.0-windows10.0.19041.0\win-x64\Jicun.exe
-```
+<p align="center">
+  <img src="docs/images/parse.png" alt="即存 · 解析页" width="100%">
+</p>
 
-## 打包
+<p align="center">
+  <a href="https://github.com/dhvbjvvb/jicun-desktop/releases/latest"><img src="https://img.shields.io/github/v/release/dhvbjvvb/jicun-desktop?style=flat&amp;label=release&amp;color=4D6BFE" alt="最新版本"></a>
+  <a href="https://github.com/dhvbjvvb/jicun-desktop/releases"><img src="https://img.shields.io/github/downloads/dhvbjvvb/jicun-desktop/total?style=flat&amp;label=downloads&amp;color=4D6BFE" alt="总下载量"></a>
+  <a href="https://github.com/dhvbjvvb/jicun-desktop"><img src="https://img.shields.io/github/stars/dhvbjvvb/jicun-desktop?style=flat&amp;label=%E2%98%85&amp;color=08C" alt="GitHub stars"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-2EA44F?style=flat" alt="MIT License"></a>
+  <img src="https://img.shields.io/badge/Windows%20x64-Win10%201809%2B-0078D6?style=flat-square" alt="支持 64 位 Windows 10 1809 及以上">
+</p>
 
-```powershell
-.\pack.ps1 -Verify      # win-x64 自包含 + zip，打完启动一次确认不是坏包
-```
+<a id="download"></a>
 
-默认自包含（.NET 运行时 + Windows App SDK 运行时都塞进去），解压就能跑，
-代价是 168 MB 目录 / 66 MB zip —— 这已经是裁掉 Windows App SDK 那套用不上的 AI / 语义搜索 /
-小组件负载之后的体积（`pack.ps1 -SkipTrim` 关掉裁剪会多 60 MB 左右）。加 `-FrameworkDependent`
-出框架依赖的小包，但目标机器得先装 .NET 10 桌面运行时和 Windows App SDK 运行时。
+## 下载与安装
 
-> ⚠️ `dotnet publish` 不会自动带上 `Jicun.pri`，少了它 exe 双击秒崩
-> （退出码 0xC000027B）而且没有任何日志。csproj 里的 `IncludePriInPublish` target
-> 负责把它补进发布清单 —— 别删。`pack.ps1 -Verify` 就是拦这个的。
+| 版本 | 下载 | 装法 |
+| --- | --- | --- |
+| **安装版**（推荐） | [Jicun-Setup-版本.exe](https://github.com/dhvbjvvb/jicun-desktop/releases/latest) | 双击运行安装器，点几下装好；**支持应用内自动更新** |
+| 绿色版（解压即用） | [Jicun-win-x64.zip](https://github.com/dhvbjvvb/jicun-desktop/releases/latest) | 解压到任意文件夹，双击 `Jicun.exe`；**没有自动更新**，新版要自己下 |
 
-### 安装器（Inno Setup）
+- **系统要求**：64 位 Windows 10 1809（build 17763）或更高 / Windows 11。
+- **不用装依赖**：.NET 运行时、Windows App SDK 运行时都在包里；VC++ 运行库也不需要。
+- **不需要管理员权限**：按当前用户装在自己的目录里，不弹 UAC。
+- 体积：安装器约 45 MB，装完约 168 MB；绿色包约 66 MB。
+- 装好之后安装目录里有一份 [`使用说明.txt`](使用说明.txt)，可以顺手发给别人看。
 
-```powershell
-.\pack.ps1 -Installer -Verify     # 打包 + 编译安装器：dist\Jicun-Setup-<版本>.exe
-winget install JRSoftware.InnoSetup   # 没装 Inno Setup 6 的话，先装它（只用 ISCC，不进包）
-```
+> **安装包没有代码签名证书**：如果 Windows 弹了蓝色的「Windows 已保护你的电脑」，点「更多信息」→「仍要运行」就行 —— 不是病毒。（少数杀毒软件也可能误报，同样可以放心。）
 
-`installer.iss` 打的是上面那个目录（不是 zip），出来一个约 45 MB 的安装器。**这个安装器同时就是更新的载荷** ——
-客户端检查到新版会下它、静默跑它。几个刻意的选择：
+## 主要功能
 
-| 决定 | 为什么 |
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <h3>链接解析</h3>
+      <p>整段分享文案粘进来会自动挑出链接，Enter 直接解析，也可以点「粘贴」读剪贴板。一次解析最多等 25 秒，跑的时候按钮变「取消」—— 域名一条都不通时不用干等。</p>
+    </td>
+    <td width="50%" valign="top">
+      <h3>真实清晰度</h3>
+      <p>不显示上游那套「原画 / 高清」，而是读视频文件头拿到真实宽高，标成 <code>3210P</code> 这种能一眼比较的数字。</p>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <h3>预览</h3>
+      <p>图片、视频、音频都能先看一眼再下：视频音频用系统播放器内核（原生 HLS + 自带传输控件），图片可缩放。</p>
+    </td>
+    <td width="50%" valign="top">
+      <h3>下载够稳</h3>
+      <p>3 路并发；单个文件大于 8 MB 自动切 4 段 Range 并行，每段最多重试 2 次；落盘后按文件头修正后缀，重名自动加序号；**关掉程序再打开能接着下**。</p>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <h3>音频标签</h3>
+      <p>音频下载完自动写 ID3v2.4 / MP4 标签（标题、作者、专辑、封面），本地音乐库里也能认。</p>
+    </td>
+    <td width="50%" valign="top">
+      <h3>三个保存位置</h3>
+      <p>视频（含实况图）、图片、音频各存各的，都能自己选目录，默认落在 <code>视频\即存</code> / <code>图片\即存</code> / <code>音乐\即存</code>；下载页每张卡会告诉你它会存到哪。</p>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <h3>历史记录</h3>
+      <p>最多留 200 条，同一个链接只留最新一条；点「重新解析」直接带着链接回解析页。清理时**只删记录，磁盘上已经下好的文件一个都不动**。</p>
+    </td>
+    <td width="50%" valign="top">
+      <h3><a href="#update">自动更新</a> + <a href="#uninstall">一键卸载</a></h3>
+      <p>装的是安装版就能在程序里直接更新（进度可见、校验指纹、装完自己重启）；卸载会帮你关掉正在运行的程序，并把本地数据一起清干净。</p>
+    </td>
+  </tr>
+</table>
+
+<p align="center">
+  <img src="docs/images/downloads.png" alt="即存 · 下载页" width="100%">
+</p>
+
+<a id="update"></a>
+
+## 自动更新
+
+程序启动时会在后台查一次最新版，设置页也有「检查更新」手动查。
+
+- **有新版本就弹一个公告窗口**：上面写这次改了什么（就是 GitHub 上那条 Release 的正文），底下「忽略」/「更新」。
+- **「忽略」只忽略这一个版本**：以后出了更高的版本照样提示，手动点「检查更新」也照样能再看到它。
+- **点「更新」**：下载安装器（有进度条和百分比）→ 校验文件指纹 → 静默安装 → 程序自己重启到新版。
+- **指纹对不上会自动换一个下载源重试**，不会拿一个坏文件往你机器上装。
+- **连不上 GitHub 时**会弹窗说明原因，并给一个**「去发布页」**按钮 —— 自己下载安装包就行。（国内直连 GitHub 时通时不通，所以默认会先走镜像。）
+- **绿色版没有自动更新**（解压即用那份没法自己覆盖自己），弹窗里给的是「去下载」。
+
+<a id="uninstall"></a>
+
+## 卸载
+
+三种方式，随便挑一个：
+
+1. **设置 → 应用 → 已安装的应用**，搜「即存」→ 卸载。
+2. **开始菜单 → 即存 → 「卸载 即存」**。
+3. 直接运行安装目录里的 `unins000.exe`。
+
+卸载流程：
+
+- 如果程序正在运行，**先弹窗让你一键关掉它**（不关就卸载的话，文件被占用会留下删不掉的残留）。
+- 然后弹一次确认：**设置、观看历史、下载记录和缓存会一起删掉**，删了恢复不了。
+- **你自己下载到「视频 / 图片 / 音乐」里的文件一个都不动** —— 那是你的东西。
+- 装的所有文件、开始菜单和桌面快捷方式、注册表里的卸载项都会清掉。
+
+## 你的数据放在哪
+
+全部在本机，不上传：
+
+| 东西 | 位置 |
 | --- | --- |
-| 按用户装（`PrivilegesRequired=lowest` → `%LOCALAPPDATA%\Programs\Jicun`） | 不弹 UAC；而且程序对自己目录有写权限 —— 装在 Program Files 里会让应用内自动更新变成「用不了」 |
-| 欢迎页 + 协议页（`LICENSE`，MIT）里「我接受」**默认选中** | 用户不用多点一下；想拒绝仍可点另一项（`[Code]` 里 `LicenseAcceptedRadio.Checked := True`） |
-| 桌面快捷方式**默认勾选** | `[Tasks]` 的 `checkedonce`：默认勾上，但用户取消过一次之后升级不会偷偷加回来 |
-| 卸载前先把程序关掉 | 程序在跑时文件被占用、会留下 72 个删不掉的 DLL（实测 113.8 MB），所以 `[Code]` 的 `InitializeUninstall` 会检测它：**弹窗让用户一键关掉**（静默卸载则直接关），退不掉再强杀 |
-| 卸载连本地数据一起删 | 设置 / 历史 / 下载记录 / 缓存（`%LOCALAPPDATA%\Jicun`）整目录清掉（`[UninstallDelete]`），但**不动用户自己下载的视频 / 图片 / 音频**；删数据前会弹一次确认 |
-| 按钮和页面文案写死中文 | Inno 官方发行包**不带**简体中文语言文件（`ChineseSimplified.isl` 不在里面），所以在 `[Messages]` 里覆盖了用户会走到的那几页；键名写错 ISCC 会在编译期报出来。**卸载器那套键（`ConfirmUninstall` / `UninstalledAll` / `UninstallAppFullTitle` …）也得单独覆盖** —— 不覆盖的话卸载确认页是英文的（实测踩过） |
+| 三个保存位置 | 设置页；`%LOCALAPPDATA%\Jicun\settings.json` |
+| 解析历史 | `%LOCALAPPDATA%\Jicun\history.json`（最多 200 条） |
+| 断点续传的分片 | `%LOCALAPPDATA%\Jicun\incomplete\` |
+| 域名热更存档 | `%LOCALAPPDATA%\Jicun\server-config.json` |
+| 忽略的版本 | `%LOCALAPPDATA%\Jicun\update-state.json` |
+| 更新包缓存 | `%LOCALAPPDATA%\Jicun\update\`（装完或下次启动顺手清） |
 
-想换成"一个 exe 单文件、不要安装器"，那是另一条路：`dotnet publish -p:PublishSingleFile=true -p:EnableMsixTooling=true`
-（少了 `EnableMsixTooling` 会直接报错）。不压缩 457 MB，加 `-p:EnableCompressionInSingleFile=true` 压到 221 MB，
-实测单独一个 exe 也能正常起界面 —— 但那份没法像绿色包这样裁掉用不上的负载，所以默认还是出绿色包 + 安装器。
-
-## 更新
-
-启动时后台查一次，设置页也有「检查更新」手动查。**检测就是问 GitHub 上最新的那个正式版**
-（`api.github.com/repos/dhvbjvvb/jicun-desktop/releases/latest`，先试 gh-proxy 镜像再直连；
-实测 ghfast 对 api 路径回 403，它只代理 raw 和附件）。一次应答里就有全部信息：
-
-| 要什么 | 应答里哪来 |
-| --- | --- |
-| 版本号 | `tag_name`（`v1.0.1`） |
-| 更新说明（弹窗里那段） | `body` —— **就是你在 Release 页面椭圆那块写的** |
-| 装哪个包、多大 | `assets[]` 里那个 `Jicun-Setup-<版本>[-win-arm64].exe` |
-| 包的 sha256 | 同一个附件的 `digest`（GitHub 自己算的） |
-
-没有第二份清单要维护：**发完 Release 就完事**，不用再提交什么文件。代价是检测走 api 而不是静态文件
-（国内直连时通时不通），所以靠 gh-proxy 垫；`JICUN_RELEASE_API` 指到本地 JSON 可离线演练。
-「仓库还没发过 Release」那种 404 应答按「检查更新失败」处理，不影响程序本身。
-
-有新版就弹公告窗口（**两种版本都弹**）：上面是这次改了什么（Release 正文），底下左边「忽略」、右边「更新」（绿色版 / 公告型版本是「去下载」）。窗口**尺寸固定**（620×520，见 `Views/UpdateDialog.cs` 顶部常量），
-说明区是固定大小的滚动区：不超就正常看，超了在右侧出滚动条上下拉着预览全文。
-
-说明按迷你 Markdown 渲染（`Views/Markdown.cs`，自己写的，不引库）。GitHub 上常用的那几样都认：
-
-| 写法 | 效果 |
-| --- | --- |
-| `#` ~ `######` | 标题（字号递减；`# 标题 #` 尾部井号不算文字） |
-| `**粗**` / `__粗__`、`*斜*` / `_斜_` | 加粗 / 斜体（`file_name_x` 这种词内下划线不当斜体） |
-| `` `代码` `` / `~~删除线~~` / `==高亮==` | 等宽 / 删除线 / 高亮 |
-| `[文字](链接)` / 裸链接 | 链接，**只放行 http / https**、可带 `"标题"`；`https://…` 直接写也能成链接 |
-| `- ` `* ` `+ ` / `1. ` | 无序 / 有序列表，前导空格缩进一级（2 空格） |
-| `- [ ]` / `- [x]` | 任务列表（☐ / ☑） |
-| `> ` | 引用（连续几行合成一段，左侧竖线） |
-| ` ``` ` / `~~~` | 围栏代码块（等宽 + 底色，里面不再解析） |
-| `---` / `***` / `___` | 分隔线 |
-| `\| 表头 \|` + `\|---\|---\|` | 表格（列等分，表头加粗） |
-| `<div align="center">…</div>`、`<center>…</center>`、`<br>` | 居中 / 换行（GitHub 网页也认，同一份说明两边看着都对） |
-
-不做图片（要联网抓图）、HTML 实体与其它 HTML 标签、列表里套引用。
-实现上有两个坑值得记一笔：高亮走 WinUI 的 `TextHighlighters`（按字符区间刷底色）—— WinUI 3 的 `InlineUIContainer` 一用就抛异常，
-`Run` 又没有 `Background`，而 `TextHighlighter` 不认笔刷的 `Opacity`（会刷成纯色），所以底/字色都写死（金底黑字，深色主题也看得清）；
-删除线用 `Run.TextDecorations`（`TextElement` 上有这个属性，能按片段划）。
-
-- 「忽略」只忽略**这一个版本**：用户现在 1.0.0、忽略掉 1.0.1，下次检出 1.0.1 就不再打扰；
-  等出了 1.0.2 照样弹。手动点「检查更新」时一律照弹，让他还能改主意。
-  （忽略记在 `%LOCALAPPDATA%\Jicun\update-state.json`。）
-- 「更新」→ 下载安装器（进度条 + 百分比）→ 对 sha256 → **静默跑它**
-  （`/SILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS`，见 `UpdateService.SetupArguments`）
-  → 主程序退出 → 它装完自己把新版拉起来（`installer.iss` 的 `[Run]` 那条去掉了 `skipifsilent`，
-  静默安装也照样跑）。覆盖文件、快捷方式、卸载项都归安装器管，客户端不再自己覆盖自己。
-- **只有安装器装的版本能自动装**：判据是安装器写的卸载项（HKCU 里 `InstallLocation` 就是当前目录）。
-  绿色版（解压即用）点「更新」会被装到 `%LOCALAPPDATA%\Programs\Jicun`，等于凭空多出一份、原来那份还在原地 ——
-  所以绿色版弹窗里的按钮是「去下载」，开浏览器自己去发布页拿绿色包，解压覆盖一下就行。
-  读不到卸载项就按绿色版算（宁可让人手动下，也不要往别人的安装目录里装）。
-- sha256 取自附件自带的 `digest`（GitHub 自己算的）。镜像站是第三方，所以**没有哈希就不装** —— 那种情况当公告处理。
-
-发版：
-
-```powershell
-.\release.ps1 -Version 1.0.1 -Notes "修了解析时闪退；设置页加了检查更新"
-.\release.ps1 -Version 1.0.1 -NotesFile notes.md -Publish    # 顺手 gh release create
-```
-
-它会改 csproj 里的 `<Version>`、调 `pack.ps1 -Installer`（出安装器 + 绿色包）；`-Publish` 时把安装器和 zip
-一起传上 Release，`-Notes` / `-NotesFile` 那段就是弹窗里的更新说明。
-**发版必须 `-Publish`（或在网页上建 Release）** —— 客户端只认 Release 上的东西；另记得把 csproj 的版本号提交。
+卸载时上面这些会**一起删掉**。程序本身不收集也不回传你的使用数据；只有解析、下载、检查更新这几件事会联网。
 
 ## 命令行模式
 
-同一个 exe，带参数就是无界面模式（批处理、排障、"下载器到底能不能下"这种验证用）：
+同一个 exe，带参数就是无界面模式（批处理、排障用）：
 
 | 命令 | 干什么 |
 | --- | --- |
 | `Jicun.exe` | 打开界面 |
-| `Jicun.exe --download <url> [--name 文件名] [--dir 文件夹] [--kind video\|image\|audio]` | 下载一个文件（`--dir` 优先；没给就按 `--kind` 归到那一档，默认 video） |
-| `Jicun.exe --download <url> --audio --title 标题 --artist 歌手 --album 专辑 --cover <封面地址>` | 当音频下，落盘后补 ID3/MP4 标签 |
 | `Jicun.exe --parse <链接或整段分享文案>` | 只看解析结果，并打印走的是哪条路 |
-| `Jicun.exe --hosts` | 拉一次 /ips.json，看域名热更结果 |
-| `Jicun.exe --secrets` | 看上游直连密钥配没配 |
-| `Jicun.exe --selftest` | 自检（真实应答映射 / 清晰度去重 / 图集去重 / 域名白名单边界 / 音频标签字节级往返），不联网、不开界面；音频那组会在 `%TEMP%` 造几个临时文件再删掉 |
+| `Jicun.exe --download <url> [--name 文件名] [--dir 文件夹] [--kind video\|image\|audio]` | 下载一个文件 |
+| `Jicun.exe --download <url> --audio --title 标题 --artist 歌手 --album 专辑 --cover <封面地址>` | 当音频下，落盘后补标签 |
+| `Jicun.exe --selftest` | 自检（不联网、不开界面） |
+| `Jicun.exe --hosts` / `--secrets` | 看域名热更结果 / 上游密钥配没配 |
 | `Jicun.exe --help` | 用法 |
 
-## 结构
+## 常见问题
 
-| 路径 | 干什么的 |
-| --- | --- |
-| Jicun.Desktop.csproj | 单工程。net10.0-windows10.0.19041.0 / win-x64。含 IncludePriInPublish |
-| pack.ps1 | 自包含 publish + 裁掉用不上的 AI / 语义搜索负载 + zip；`-Verify` 打完启动一次验包，`-Installer` 再编译安装器 |
-| installer.iss | Inno Setup 安装器脚本：按用户装、欢迎页 + 协议（默认已接受）、桌面快捷方式默认勾选、中文文案；**它同时是更新的载荷**（客户端静默跑的就是它） |
-| release.ps1 | 发版：改版本号 → 打包（安装器 + 绿色包）→ 可选 gh release create（安装器 + zip + 说明一起上传） |
-| Program.cs / Cli.cs | 入口分流：有参数走命令行，没参数起界面 |
-| SelfCheck.cs | 命令行自检的断言（`--selftest`）：跑真实应答 fixture、纯逻辑边界、音频标签字节级往返 |
-| Views/SelectableList.cs | 下载页 / 历史页共用的「选择 / 全选 / 删除」状态机（原来两边各抄一份） |
-| .github/workflows/ci.yml | 门槛：编译 + 跑 `--selftest`（判定只看退出码） |
-| MainWindow.xaml(.cs) | 自绘标题栏 + 左侧 NavigationView + 应用图标 |
-| Models/MediaModels.cs | MediaItem / VideoVariant / ParseResult，含解析应答的字段映射 |
-| Services/ParseService.cs | 两条路：上游聚合直连（先试）+ media-parser（兜底）；判成败、取错误文案 |
-| Services/UpstreamMapping.cs | 上游应答 → ParseResult：平台识别、清晰度归一去重、图集清理、文案清洗 |
-| Services/MediaProbe.cs | 读 MP4 文件头（moov→trak→tkhd）拿真实宽高，把「原画」变成 3210P 这种真分辨率 |
-| Services/Secrets.cs | 上游密钥与基址（默认值在本机私有的 LocalDefaults.cs，不进仓库；环境变量 / %LOCALAPPDATA%\\Jicun\\secrets.json 可覆盖） |
-| Services/LocalDefaults.cs.example | 内置默认值（密钥 / 基址 / 兜底域名）的模板：复制成 LocalDefaults.cs 填自己的，那份不进仓库 |
-| Services/ApiHosts.cs | 域名热更：拉 /ips.json、信任校验、候选顺序、白名单、本地存档 |
-| Services/DownloadService.cs | 队列 + Range 分段并行 + 段级重试 + 文件头嗅探定后缀 + 断点续传 + 音频标签 |
-| Services/AudioTags.cs | ID3v2.4 / MP4 ilst 标签写入；按文件头判格式，写临时文件再原子替换 |
-| Services/ResumeStore.cs | 断点续传的进度存档 |
-| Services/SettingsService.cs | 三个保存位置（视频含实况 / 图片 / 音频，键名 videoFolder / imageFolder / audioFolder）+ 旧配置迁移，存 %LOCALAPPDATA%\\Jicun\\settings.json |
-| Services/HistoryService.cs | 解析历史，存 %LOCALAPPDATA%\\Jicun\\history.json，最多 200 条 |
-| Services/AppServices.cs | 进程内服务定位器（App 太小，不值得上 DI 容器） |
-| Services/UpdateService.cs | 检查更新：拉最新版（镜像 / 直连 api）、下载安装器 exe、对 sha256、静默起安装器 |
-| Views/ | 解析、下载、历史、设置四个页面 + 预览对话框 |
-| Views/UpdateDialog.cs | 更新公告窗口（固定尺寸 + 说明区滚动 + 进度条），以及检查更新的编排（含去 Release 取说明） |
-| Views/Markdown.cs | 更新说明用的迷你 Markdown：解析（纯函数，自检离线可验）+ 渲染成控件 |
-| Converters/ | URL 字符串 → Image.Source（x:Bind 不做隐式转换） |
+**装的时候被 Windows 拦了？**
+安装包没买代码签名证书。点「更多信息」→「仍要运行」；少数杀毒软件误报同理。
 
-## 已实现
+**支持哪些系统？**
+64 位 Windows 10 1809（build 17763）及更高 / Windows 11。目前只出 x64 包。
 
-- 解析：整段分享文案里自动挑链接，Enter 直接解析，粘贴按钮读剪贴板。
-  Windows 没有 Android 那条明文限制，所以上游应答里的 `http://` 直链**不做** https 升级
-  （与 Android 版刻意不同：那边升级是必须的，这边升级反而多一次失败机会）。
-- 结果摊平成卡片：视频（多清晰度各一张、实况图单独一张）、图片、音频；封面等于视频封面时不重复列图片。
-- 清晰度标签显示**真实分辨率**而不是上游的「原画 / 高清 / 原画 34.7Mbps」：
-  应答里带了 width/height 就直接算短边（抖音根节点 7680x3210 → `3210P`）；
-  只给了 `quality:"original"` 或 `"原画"` 又没宽高的（快手），就去读视频文件头里的真实宽高
-  （快手那条标着原画的其实和它 720p 档同为 1600x704 → `704P`）。
-  探测只挑标签里没数字的档，最多 3 个、整体 6 秒，失败就保留原标签 —— 它只是锦上添花，绝不能让解析失败。
-- 一次解析最多等 25 秒：上游那条 12 秒 + 兜底域名池一个总预算。解析按钮在跑的时候变「取消」——
-  域名一个都不通的时候，没这个出口用户只能干等。
-- 预览：图片 / 视频 / 音频三种，都走 ContentDialog；视频音频用 MediaPlayerElement
-  （原生 HLS + 自带传输控件），图片可缩放。
-- 下载：3 路并发，单文件大于 8MB 走 4 段 Range 并行，每段最多重试 2 次，
-  落盘后按文件头修正后缀，重名自动加序号；进程重启后能接着下。
-  分片留在 `%LOCALAPPDATA%\\Jicun\\incomplete`，合并出来的整份文件直接落在**目标目录**里再改名 ——
-  下载目录在别的盘时，不会在最后一步把整份文件再拷一遍。
-- 音频下载完自动写 ID3 / MP4 标签（标题、作者、专辑、封面）。
-  写标签要整份文件读进内存再原子替换，可能失败 —— 那时文件已经下好了，所以写不进去只吞掉，不判下载失败。
-- 域名热更：启动后台拉一次 /ips.json，换域名、取平台白名单、存本地。
-- 保存位置分三档、各自可自选：**视频（含实况图，落盘是 mp4）/ 图片 / 音频**。
-  默认分别是 `Videos\即存`、`Pictures\即存`、`Music\即存`（Windows 对应库下加「即存」子目录）；
-  设置页每档一个「选择...」和「打开」，下载页每张卡显示自己会存到哪。
-  选目录走 WinRT FolderPicker + HWND 互操作（非打包应用必须这步）。
-  旧版只有单一下载目录的配置会自动铺满三档，不会让老用户的文件突然换地方。
-- 历史点击「重新解析」直接带着链接回解析页，卡片左边是封面图（老记录没存封面就显示占位图标）。
-- 同一个链接重复解析只留最新一条（旧的整条换掉，不会堆出一串一模一样的记录）；
-  老配置文件里已经堆下的重复项会在启动读历史时自动合并一次。
-- 下载页和历史页都能清理记录：点「选择」进勾选模式（按钮变「完成」，每行出现勾选框），
-  逐条勾或点「全选」，再点「删除」。**只删记录，磁盘上已经下好的文件一个都不动**；
-  「全选」是个开关，已经全选时再点一次就变成取消全选。
-- 取消下载后状态是「已取消」，不会卡在「下载中」，也不会出现「已完成 25.9 MB / 27.5 MB」这种矛盾数字。
-- 无界面命令行模式，见上。
+**要不要先装 .NET 或运行库？**
+不用。.NET 运行时和 Windows App SDK 运行时都打进去了，VC++ 运行库也不需要。
 
-## 还没做
+**更新装不上 / 卡住？**
+更新失败会在窗口里写明原因。国内网络连 GitHub 不稳时，点弹窗里的「去发布页」自己下载安装包覆盖安装即可。绿色版请手动换包。
 
-- FLAC 标签写入。AudioTags 只识别 FLAC 不写（Android 版也只写 mp3/mp4）。
-- **真实上游已在 4 个平台实测通过**：抖音 / 快手 / 微信视频号 / 豆包各拿真实分享链接跑通，
-  路由分别是 `upstream:douyin` / `upstream:kuaishou` / `upstream:wechatchannels` / `upstream:doubao`。
-  本地 mock 的回归用例仍在，详见 [UPSTREAM.md](UPSTREAM.md)。
-- MSIX 打包与签名。现在是绿色包 + 安装器；**自动更新只对安装器装的版本生效**，绿色版要到 GitHub 手动下。
-- 上游应答里 `.m3u8` 的清晰度会被丢掉（下载器不做 HLS 分片拼接），与 Android 版一致。
+**解析失败？**
+可能是链接所在平台改了接口，或当前网络到上游不通。可以把链接和报错发到 Issue 里。
 
+**卸载后还有残留吗？**
+正常卸载（先关掉程序）不会残留：程序文件、快捷方式、卸载项、本地数据都会清掉。只有「程序还在运行时强卸」这种情况才可能留下被占用的 DLL，那种情况请先退出程序再卸一次。
 
-## 超时
+## 开发
 
-分三层，别混着用（每个 `HttpClient` 用哪一层都写在它自己的注释里）：
-
-| 层 | 给谁用 | 怎么给 |
-| --- | --- | --- |
-| 固定超时 | 小请求、一次性的：最新版接口、`/ips.json` | `HttpClient.Timeout` |
-| 请求级 | 解析：上游 12 秒 / 兜底每个域名 20 秒（按剩余预算截断） | 每次请求现建 linked CTS |
-| 整体预算 | 兜底域名池整趟 25 秒、更新包下载整趟 20 分钟 | 一处 CTS 管一整趟 |
-
-下载和媒体探测在这层不设上限（`Timeout.InfiniteTimeSpan`）：大文件绝不能被固定超时掐死，
-它们的上限由调用处的 CTS（整体预算）或「每段自己的重试」给。
-## 配置
-
-| 东西 | 在哪 |
-| --- | --- |
-| 三个保存位置 | 设置页；%LOCALAPPDATA%\\Jicun\\settings.json |
-| 解析历史 | %LOCALAPPDATA%\\Jicun\\history.json（最多 200 条） |
-| 域名热更存档 | %LOCALAPPDATA%\\Jicun\\server-config.json |
-| 忽略的版本 | %LOCALAPPDATA%\Jicun\update-state.json |
-| 更新包缓存 | %LOCALAPPDATA%\Jicun\update\（下载的安装器 + 半截下载；装完或下次启动顺手清） |
-| 上游密钥 | 默认值在本机私有的 LocalDefaults.cs（不进仓库，仓库里只有空占位）；覆盖：环境变量 `JICUN_UPSTREAM_KEY` / `JICUN_UPSTREAM_BASE`，或 %LOCALAPPDATA%\\Jicun\\secrets.json |
-| 最新版从哪查 | 覆盖：环境变量 `JICUN_RELEASE_API`（自建镜像 / 本机调试 / 自检用）。设了就**只走它**；指到本地 JSON 文件就能离线演练弹窗，不用真发版 |
-| 兜底域名池（**只给排障用**） | 覆盖：环境变量 `JICUN_HOSTS`（逗号分隔，顺序即优先级）。设了就只走这几个入口 —— 用来演「第一个入口不通时会不会试下一个」这类平时触发不到的分支（平时池里全是自己的真实域名，个个都会答话） |
-
-默认值放在 `Services\LocalDefaults.cs`（本机私有，仓库里没有这个文件，只有值全空的
-LocalDefaults.Fallback.cs），环境变量和 secrets.json 仍然优先，换 key 不必重新构建。
-用 `Jicun.exe --secrets` 看当前用的是哪一档、来源是什么。
-默认值编进二进制后能被反编译读出 —— 真要做全量分发，应改成让客户端拿短期 token 走自建代理。
-
-## 解析应答契约
-
-- 兜底那条路：`GET https://<兜底域名>/parse?url=<UrlEncode(shareUrl)>`，20 秒超时。域名在 LocalDefaults.cs / server-config.json 里配。
-- 上游那条路：`<upstreamBase>/api/dyjx | /api/ksjx | /api/wxsph | /api/doubao`，
-  12 秒超时，带 `X-API-Key`。每个平台一条独立接口，拿错平台会回 422。
-
-成功看 `succ == true`，或 `code / retcode / status` 为 0 或 200；
-三个都没有时，只要带了 `data` 对象也算成功（上游应答就是包在 `data` 里的）。
-失败文案优先取 `retdesc / error / message / msg`。例如无效链接会回：
-
-```json
-{"retcode":400,"retdesc":"该内容可能为私密/日常作品或已被作者删除","succ":false,"data":null}
+```powershell
+dotnet run                                  # 直接跑
+.\pack.ps1 -Verify                          # 自包含打包 + zip，打完启动一次确认不是坏包
+.\pack.ps1 -Installer -Verify               # 再编译 Inno Setup 安装器（需先装 Inno Setup 6）
+.\release.ps1 -Version 1.0.6 -Notes "说明" -Publish   # 改版本号 → 打包 → 发 GitHub Release
 ```
 
-⚠️ 上游解析失败用的是 **HTTP 400 + retdesc**，不是 200 + succ:false —— 不能拿状态码当结论。
-数据体在 `data`（或 `result`）。中文必须按 UTF-8 解，别依赖 Content-Type 里的 charset，
-缺了会按 latin-1 解成乱码。
+架构、打包细节、更新链路、超时分层、配置项都在[开发说明](docs/开发说明.md)；CI 只做两件事：编译 + 跑 `--selftest`。
+
+| 目标 | 入口 |
+| --- | --- |
+| 快速了解怎么装、怎么用 | 这份 README + [`使用说明.txt`](使用说明.txt) |
+| 改代码 / 打包 / 发版 | [开发说明](docs/开发说明.md) |
+| 提 Issue / 反馈 | [Issues](https://github.com/dhvbjvvb/jicun-desktop/issues) |
+
+## License
+
+本项目遵循 [MIT License](LICENSE)。
+
+> 本项目完全免费开源。如果有人向你收费出售此软件，请拒绝。
+>
+> 本程序只提供「解析你自己有权访问的链接并下载」这一技术能力，不提供任何内容、不破解任何权限或付费墙；请遵守各内容平台的服务条款与当地法律，使用风险自负。
+>
+> 本仓库与任何内容平台不存在隶属、合作、授权或背书关系。
+
+## Star History
+
+<a href="https://www.star-history.com/?repos=dhvbjvvb%2Fjicun-desktop&amp;type=date&amp;legend=top-left">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=dhvbjvvb/jicun-desktop&amp;type=date&amp;theme=dark&amp;legend=top-left">
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=dhvbjvvb/jicun-desktop&amp;type=date&amp;legend=top-left">
+    <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=dhvbjvvb/jicun-desktop&amp;type=date&amp;legend=top-left">
+  </picture>
+</a>
