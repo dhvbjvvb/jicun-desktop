@@ -42,15 +42,17 @@ dotnet build -c Release
 winget install JRSoftware.InnoSetup   # 没装 Inno Setup 6 的话，先装它（只用 ISCC，不进包）
 ```
 
-`installer.iss` 打的是上面那个目录（不是 zip），出来一个约 45 MB 的安装器。几个刻意的选择：
+`installer.iss` 打的是上面那个目录（不是 zip），出来一个约 45 MB 的安装器。**这个安装器同时就是更新的载荷** ——
+客户端检查到新版会下它、静默跑它。几个刻意的选择：
 
 | 决定 | 为什么 |
 | --- | --- |
 | 按用户装（`PrivilegesRequired=lowest` → `%LOCALAPPDATA%\Programs\Jicun`） | 不弹 UAC；而且程序对自己目录有写权限 —— 装在 Program Files 里会让应用内自动更新变成「用不了」 |
 | 欢迎页 + 协议页（`LICENSE`，MIT）里「我接受」**默认选中** | 用户不用多点一下；想拒绝仍可点另一项（`[Code]` 里 `LicenseAcceptedRadio.Checked := True`） |
 | 桌面快捷方式**默认勾选** | `[Tasks]` 的 `checkedonce`：默认勾上，但用户取消过一次之后升级不会偷偷加回来 |
-| 卸载不删用户数据 | 设置 / 历史 / 下载记录都在 `%LOCALAPPDATA%\Jicun`，不归安装器管 |
-| 按钮和页面文案写死中文 | Inno 官方发行包**不带**简体中文语言文件（`ChineseSimplified.isl` 不在里面），所以在 `[Messages]` 里覆盖了用户会走到的那几页；键名写错 ISCC 会在编译期报出来 |
+| 卸载前先把程序关掉 | 程序在跑时文件被占用、会留下 72 个删不掉的 DLL（实测 113.8 MB），所以 `[Code]` 的 `InitializeUninstall` 会检测它：**弹窗让用户一键关掉**（静默卸载则直接关），退不掉再强杀 |
+| 卸载连本地数据一起删 | 设置 / 历史 / 下载记录 / 缓存（`%LOCALAPPDATA%\Jicun`）整目录清掉（`[UninstallDelete]`），但**不动用户自己下载的视频 / 图片 / 音频**；删数据前会弹一次确认 |
+| 按钮和页面文案写死中文 | Inno 官方发行包**不带**简体中文语言文件（`ChineseSimplified.isl` 不在里面），所以在 `[Messages]` 里覆盖了用户会走到的那几页；键名写错 ISCC 会在编译期报出来。**卸载器那套键（`ConfirmUninstall` / `UninstalledAll` / `UninstallAppFullTitle` …）也得单独覆盖** —— 不覆盖的话卸载确认页是英文的（实测踩过） |
 
 想换成"一个 exe 单文件、不要安装器"，那是另一条路：`dotnet publish -p:PublishSingleFile=true -p:EnableMsixTooling=true`
 （少了 `EnableMsixTooling` 会直接报错）。不压缩 457 MB，加 `-p:EnableCompressionInSingleFile=true` 压到 221 MB，
@@ -58,16 +60,22 @@ winget install JRSoftware.InnoSetup   # 没装 Inno Setup 6 的话，先装它�
 
 ## 更新
 
-启动时后台查一次，设置页也有「检查更新」手动查。检测不看 GitHub API（那接口国内时通时不通，
-还有速率限制），读的是仓库里的静态清单 `update/win-x64.json`：版本、下载地址、sha256 都写在里面。
-拉的时候挨个试 GitHub 镜像 —— ghfast.top → gh-proxy.com → 直连 → jsDelivr，第一个通的就用，这就是「检测走 CDN / 镜像」。
+启动时后台查一次，设置页也有「检查更新」手动查。**检测就是问 GitHub 上最新的那个正式版**
+（`api.github.com/repos/dhvbjvvb/jicun-desktop/releases/latest`，先试 gh-proxy 镜像再直连；
+实测 ghfast 对 api 路径回 403，它只代理 raw 和附件）。一次应答里就有全部信息：
 
-**更新说明只有一个来源：这个版本的 GitHub Release 正文**（清单里不放说明）——
-从 `api.github.com/repos/dhvbjvvb/jicun-desktop/releases/tags/v<版本>` 取（先试 gh-proxy 镜像再直连；
-实测 ghfast 对 api 路径回 403，它只代理 raw 和附件），给 4 秒预算：拿不到就显示「没有写更新说明」占位，不会把弹窗拖住。
-好处是在网页上改说明，用户下次检查就能看到，不用重发一版。**所以发版必须发 Release**（`release.ps1 -Publish` 或手工建）。
+| 要什么 | 应答里哪来 |
+| --- | --- |
+| 版本号 | `tag_name`（`v1.0.1`） |
+| 更新说明（弹窗里那段） | `body` —— **就是你在 Release 页面椭圆那块写的** |
+| 装哪个包、多大 | `assets[]` 里那个 `Jicun-Setup-<版本>[-win-arm64].exe` |
+| 包的 sha256 | 同一个附件的 `digest`（GitHub 自己算的） |
 
-有新版就弹公告窗口：上面是更新说明，底下左边「忽略」右边「更新」。窗口**尺寸固定**（620×520，见 `Views/UpdateDialog.cs` 顶部常量），
+没有第二份清单要维护：**发完 Release 就完事**，不用再提交什么文件。代价是检测走 api 而不是静态文件
+（国内直连时通时不通），所以靠 gh-proxy 垫；`JICUN_RELEASE_API` 指到本地 JSON 可离线演练。
+「仓库还没发过 Release」那种 404 应答按「检查更新失败」处理，不影响程序本身。
+
+有新版就弹公告窗口（**两种版本都弹**）：上面是这次改了什么（Release 正文），底下左边「忽略」、右边「更新」（绿色版 / 公告型版本是「去下载」）。窗口**尺寸固定**（620×520，见 `Views/UpdateDialog.cs` 顶部常量），
 说明区是固定大小的滚动区：不超就正常看，超了在右侧出滚动条上下拉着预览全文。
 
 说明按迷你 Markdown 渲染（`Views/Markdown.cs`，自己写的，不引库）。GitHub 上常用的那几样都认：
@@ -94,11 +102,15 @@ winget install JRSoftware.InnoSetup   # 没装 Inno Setup 6 的话，先装它�
 - 「忽略」只忽略**这一个版本**：用户现在 1.0.0、忽略掉 1.0.1，下次检出 1.0.1 就不再打扰；
   等出了 1.0.2 照样弹。手动点「检查更新」时一律照弹，让他还能改主意。
   （忽略记在 `%LOCALAPPDATA%\Jicun\update-state.json`。）
-- 「更新」→ 下载（进度条 + 百分比）→ 对 sha256 → 解压到 `%LOCALAPPDATA%\Jicun\update\staging-<版本>`
-  → 用**新版自己的 exe** 起一个 `--apply-update` 进程 → 主程序退出 → 它等窗口退干净再整树覆盖 → 启动新版。
-  拿自己当安装器，不多带一个二进制。
-- 装在 Program Files 这种没写权限的地方时，设置页会直接说「自动更新用不了」，让人手动下载。
-- 镜像站是第三方，所以清单里的 sha256 是**必填**的：校验不过就放弃这次更新，不装。
+- 「更新」→ 下载安装器（进度条 + 百分比）→ 对 sha256 → **静默跑它**
+  （`/SILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS`，见 `UpdateService.SetupArguments`）
+  → 主程序退出 → 它装完自己把新版拉起来（`installer.iss` 的 `[Run]` 那条去掉了 `skipifsilent`，
+  静默安装也照样跑）。覆盖文件、快捷方式、卸载项都归安装器管，客户端不再自己覆盖自己。
+- **只有安装器装的版本能自动装**：判据是安装器写的卸载项（HKCU 里 `InstallLocation` 就是当前目录）。
+  绿色版（解压即用）点「更新」会被装到 `%LOCALAPPDATA%\Programs\Jicun`，等于凭空多出一份、原来那份还在原地 ——
+  所以绿色版弹窗里的按钮是「去下载」，开浏览器自己去发布页拿绿色包，解压覆盖一下就行。
+  读不到卸载项就按绿色版算（宁可让人手动下，也不要往别人的安装目录里装）。
+- sha256 取自附件自带的 `digest`（GitHub 自己算的）。镜像站是第三方，所以**没有哈希就不装** —— 那种情况当公告处理。
 
 发版：
 
@@ -107,20 +119,9 @@ winget install JRSoftware.InnoSetup   # 没装 Inno Setup 6 的话，先装它�
 .\release.ps1 -Version 1.0.1 -NotesFile notes.md -Publish    # 顺手 gh release create
 ```
 
-它会改 csproj 里的 `<Version>`、调 `pack.ps1`、算 sha256、写 `update\<运行时>.json`。
-**发完记得把 `update\<运行时>.json` 提交推送** —— 客户端就是靠它发现新版的。
-
-客户端读的清单长这样：
-
-```json
-{
-  "version": "1.0.1",
-  "url": "https://github.com/dhvbjvvb/jicun-desktop/releases/download/v1.0.1/Jicun-win-x64.zip",
-  "sha256": "（64 位十六进制）",
-  "size": 95834112,
-  "publishedAt": "2026-10-03"
-}
-```
+它会改 csproj 里的 `<Version>`、调 `pack.ps1 -Installer`（出安装器 + 绿色包）；`-Publish` 时把安装器和 zip
+一起传上 Release，`-Notes` / `-NotesFile` 那段就是弹窗里的更新说明。
+**发版必须 `-Publish`（或在网页上建 Release）** —— 客户端只认 Release 上的东西；另记得把 csproj 的版本号提交。
 
 ## 命令行模式
 
@@ -135,7 +136,6 @@ winget install JRSoftware.InnoSetup   # 没装 Inno Setup 6 的话，先装它�
 | `Jicun.exe --hosts` | 拉一次 /ips.json，看域名热更结果 |
 | `Jicun.exe --secrets` | 看上游直连密钥配没配 |
 | `Jicun.exe --selftest` | 自检（真实应答映射 / 清晰度去重 / 图集去重 / 域名白名单边界 / 音频标签字节级往返），不联网、不开界面；音频那组会在 `%TEMP%` 造几个临时文件再删掉 |
-| `Jicun.exe --apply-update --pid 进程号 --from 新目录 --to 安装目录` | 等主程序退出后覆盖安装并重启（更新流程内部用，别手敲） |
 | `Jicun.exe --help` | 用法 |
 
 ## 结构
@@ -144,9 +144,8 @@ winget install JRSoftware.InnoSetup   # 没装 Inno Setup 6 的话，先装它�
 | --- | --- |
 | Jicun.Desktop.csproj | 单工程。net10.0-windows10.0.19041.0 / win-x64。含 IncludePriInPublish |
 | pack.ps1 | 自包含 publish + 裁掉用不上的 AI / 语义搜索负载 + zip；`-Verify` 打完启动一次验包，`-Installer` 再编译安装器 |
-| installer.iss | Inno Setup 安装器脚本：按用户装、欢迎页 + 协议（默认已接受）、桌面快捷方式默认勾选、中文文案 |
-| release.ps1 | 发版：改版本号 → 打包 → 算 sha256 → 写 update/<运行时>.json → 可选 gh release create |
-| update/<运行时>.json | 发版清单：版本 / 下载地址 / sha256。客户端检测的就是它（**更新说明不在里面**） |
+| installer.iss | Inno Setup 安装器脚本：按用户装、欢迎页 + 协议（默认已接受）、桌面快捷方式默认勾选、中文文案；**它同时是更新的载荷**（客户端静默跑的就是它） |
+| release.ps1 | 发版：改版本号 → 打包（安装器 + 绿色包）→ 可选 gh release create（安装器 + zip + 说明一起上传） |
 | Program.cs / Cli.cs | 入口分流：有参数走命令行，没参数起界面 |
 | SelfCheck.cs | 命令行自检的断言（`--selftest`）：跑真实应答 fixture、纯逻辑边界、音频标签字节级往返 |
 | Views/SelectableList.cs | 下载页 / 历史页共用的「选择 / 全选 / 删除」状态机（原来两边各抄一份） |
@@ -165,8 +164,7 @@ winget install JRSoftware.InnoSetup   # 没装 Inno Setup 6 的话，先装它�
 | Services/SettingsService.cs | 三个保存位置（视频含实况 / 图片 / 音频，键名 videoFolder / imageFolder / audioFolder）+ 旧配置迁移，存 %LOCALAPPDATA%\\Jicun\\settings.json |
 | Services/HistoryService.cs | 解析历史，存 %LOCALAPPDATA%\\Jicun\\history.json，最多 200 条 |
 | Services/AppServices.cs | 进程内服务定位器（App 太小，不值得上 DI 容器） |
-| Services/UpdateService.cs | 检查更新：拉清单（镜像 / CDN）、下载、sha256 校验、解压、起安装进程 |
-| Services/UpdateInstaller.cs | 被 `--apply-update` 调起来：等主程序退出 → 覆盖安装 → 重启新版 |
+| Services/UpdateService.cs | 检查更新：拉最新版（镜像 / 直连 api）、下载安装器 exe、对 sha256、静默起安装器 |
 | Views/ | 解析、下载、历史、设置四个页面 + 预览对话框 |
 | Views/UpdateDialog.cs | 更新公告窗口（固定尺寸 + 说明区滚动 + 进度条），以及检查更新的编排（含去 Release 取说明） |
 | Views/Markdown.cs | 更新说明用的迷你 Markdown：解析（纯函数，自检离线可验）+ 渲染成控件 |
@@ -214,7 +212,7 @@ winget install JRSoftware.InnoSetup   # 没装 Inno Setup 6 的话，先装它�
 - **真实上游已在 4 个平台实测通过**：抖音 / 快手 / 微信视频号 / 豆包各拿真实分享链接跑通，
   路由分别是 `upstream:douyin` / `upstream:kuaishou` / `upstream:wechatchannels` / `upstream:doubao`。
   本地 mock 的回归用例仍在，详见 [UPSTREAM.md](UPSTREAM.md)。
-- MSIX 打包与签名。现在是绿色包，解压即用（自动更新已经做了，见上面「更新」）。
+- MSIX 打包与签名。现在是绿色包 + 安装器；**自动更新只对安装器装的版本生效**，绿色版要到 GitHub 手动下。
 - 上游应答里 `.m3u8` 的清晰度会被丢掉（下载器不做 HLS 分片拼接），与 Android 版一致。
 
 
@@ -224,7 +222,7 @@ winget install JRSoftware.InnoSetup   # 没装 Inno Setup 6 的话，先装它�
 
 | 层 | 给谁用 | 怎么给 |
 | --- | --- | --- |
-| 固定超时 | 小请求、一次性的：发版清单、`/ips.json` | `HttpClient.Timeout` |
+| 固定超时 | 小请求、一次性的：最新版接口、`/ips.json` | `HttpClient.Timeout` |
 | 请求级 | 解析：上游 12 秒 / 兜底每个域名 20 秒（按剩余预算截断） | 每次请求现建 linked CTS |
 | 整体预算 | 兜底域名池整趟 25 秒、更新包下载整趟 20 分钟 | 一处 CTS 管一整趟 |
 
@@ -238,10 +236,9 @@ winget install JRSoftware.InnoSetup   # 没装 Inno Setup 6 的话，先装它�
 | 解析历史 | %LOCALAPPDATA%\\Jicun\\history.json（最多 200 条） |
 | 域名热更存档 | %LOCALAPPDATA%\\Jicun\\server-config.json |
 | 忽略的版本 | %LOCALAPPDATA%\Jicun\update-state.json |
-| 更新包缓存 / 解压目录 | %LOCALAPPDATA%\Jicun\update\（装完自动清；`--apply-update` 的日志是 update.log） |
+| 更新包缓存 | %LOCALAPPDATA%\Jicun\update\（下载的安装器 + 半截下载；装完或下次启动顺手清） |
 | 上游密钥 | 默认值在本机私有的 LocalDefaults.cs（不进仓库，仓库里只有空占位）；覆盖：环境变量 `JICUN_UPSTREAM_KEY` / `JICUN_UPSTREAM_BASE`，或 %LOCALAPPDATA%\\Jicun\\secrets.json |
-| 更新清单地址 | 覆盖：环境变量 `JICUN_UPDATE_MANIFEST`（自建镜像 / 本机调试用）。设了就**只走它**，不再试别的候选 |
-| Release 说明地址 | 覆盖：环境变量 `JICUN_RELEASE_API`（排障 / 自检用）。设了就只走它；指到本机 JSON 文件即可离线演练「弹窗里显示什么」 |
+| 最新版从哪查 | 覆盖：环境变量 `JICUN_RELEASE_API`（自建镜像 / 本机调试 / 自检用）。设了就**只走它**；指到本地 JSON 文件就能离线演练弹窗，不用真发版 |
 | 兜底域名池（**只给排障用**） | 覆盖：环境变量 `JICUN_HOSTS`（逗号分隔，顺序即优先级）。设了就只走这几个入口 —— 用来演「第一个入口不通时会不会试下一个」这类平时触发不到的分支（平时池里全是自己的真实域名，个个都会答话） |
 
 默认值放在 `Services\LocalDefaults.cs`（本机私有，仓库里没有这个文件，只有值全空的
