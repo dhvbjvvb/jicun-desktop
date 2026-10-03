@@ -199,13 +199,3 @@ dotnet run                                  # 直接跑
 > 本程序只提供「解析你自己有权访问的链接并下载」这一技术能力，不提供任何内容、不破解任何权限或付费墙；请遵守各内容平台的服务条款与当地法律，使用风险自负。
 >
 > 本仓库与任何内容平台不存在隶属、合作、授权或背书关系。
-
-## Star History
-
-<a href="https://www.star-history.com/?repos=dhvbjvvb%2Fjicun-desktop&amp;type=date&amp;legend=top-left">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=dhvbjvvb/jicun-desktop&amp;type=date&amp;theme=dark&amp;legend=top-left">
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=dhvbjvvb/jicun-desktop&amp;type=date&amp;legend=top-left">
-    <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=dhvbjvvb/jicun-desktop&amp;type=date&amp;legend=top-left">
-  </picture>
-</a>
